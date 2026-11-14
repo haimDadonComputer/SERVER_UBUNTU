@@ -62,6 +62,21 @@ class GitHubTests(unittest.TestCase):
     def test_repository_outside_installation_cannot_receive_token(self):
         with self.assertRaises(g.GitHubError):self.app.dispatch('repository-token',{'repositoryId':999})
         self.assertFalse(any(c[3] and c[3].get('repository_ids')==[999] for c in self.calls))
+    def test_head_uses_scoped_token_sha_media_type_etag_and_encoded_branch(self):
+        requests=[]
+        def api(method,path,bearer,body=None,headers=None):
+            if path.startswith('/repos/'):
+                requests.append((path,headers,bearer))
+                return {'notModified':True} if headers.get('If-None-Match') else {'sha':'a'*40,'etag':'"version-one"'}
+            return self.request(method,path,bearer,body)
+        self.app.request=api
+        args={'repositoryId':7,'fullName':'owner/repo-7','branch':'feature/test'}
+        result=self.app.dispatch('head',args);self.assertEqual(result['sha'],'a'*40)
+        self.assertTrue(self.app.dispatch('head',{**args,'etag':result['etag']})['notModified'])
+        self.assertIn('feature%2Ftest',requests[0][0]);self.assertEqual(requests[0][1]['Accept'],'application/vnd.github.sha')
+        self.assertEqual(requests[1][1]['If-None-Match'],'"version-one"')
+        self.assertEqual([c[3] for c in self.calls if c[0]=='POST'][-1]['repository_ids'],[7])
+        self.assertFalse(any(c[1].startswith('/installation/repositories') for c in self.calls))
     def test_token_is_reused_then_refreshed_before_expiry(self):
         first=self.app.token(7);self.assertEqual(self.app.token(7),first)
         self.app.tokens['7']['expires']=self.now+250

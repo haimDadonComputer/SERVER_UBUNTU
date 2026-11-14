@@ -1,13 +1,24 @@
 #!/usr/bin/python3
 """Unprivileged, fixed Git/release workflow; invoked only by the helper."""
-import os, sys, json, subprocess, pathlib, re, time
+import os, sys, json, subprocess, pathlib, re, time,shutil,hashlib
 from git_credentials import credentials
 from diagnostics import failure,exception_details,serialize,OperationError
 
 GITHUB_TOKEN=None
+BUILD_ENV={}
+BUILD_CONFIG={}
+
+def readable_release(releases,target):
+    # Runtime identities share only the project group; source is mounted read-only.
+    releases.chmod(0o2750)
+    for directory,dirs,files in os.walk(target,followlinks=False):
+        pathlib.Path(directory).chmod(0o2750)
+        for name in files:
+            path=pathlib.Path(directory)/name
+            if not path.is_symlink():path.chmod(0o750 if path.stat().st_mode & 0o111 else 0o640)
 
 def command(root, argv, timeout=240):
-    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='https:ssh', GIT_SSH_COMMAND='/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes', npm_config_audit='false')
+    env = dict(os.environ, **BUILD_ENV, GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='https:ssh', GIT_SSH_COMMAND='/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes', npm_config_audit='false')
     name=pathlib.Path(argv[0]).name
     if name=='git':stage='git-'+next((x for x in argv[1:] if x in ('clone','fetch','remote','status','rev-parse','for-each-ref','log','branch','merge','worktree')),'command')
     elif name=='env' and len(argv)>2 and argv[1]=='npm':stage='npm-'+(argv[3] if argv[2]=='run' and len(argv)>3 else argv[2])
@@ -50,8 +61,83 @@ def status(root):
     upstream=git(root,'for-each-ref','--format=%(objectname)','refs/remotes/origin/'+branch)
     return {'repo':remote,'branch':branch,'commit':current,'dirty':dirty,'remoteCommit':upstream or None,'remoteChecked':False}
 
+def options(root):
+    package=json.loads((root/'package.json').read_text()) if (root/'package.json').is_file() else {}
+    entries=[]
+    for directory,dirs,files in os.walk(root,followlinks=False):
+        dirs[:]=[d for d in dirs if not d.startswith('.') and d not in ('node_modules','shared','current','data') and not (pathlib.Path(directory)/d).is_symlink()]
+        if len(pathlib.Path(directory).relative_to(root).parts)>7:dirs[:]=[];continue
+        for name in files:
+            f=pathlib.Path(directory)/name
+            if f.suffix in ('.js','.mjs','.cjs') and not f.is_symlink():entries.append(f.relative_to(root).as_posix())
+            if len(entries)>=800:break
+        if len(entries)>=800:break
+    return {'scripts':sorted(k for k in package.get('scripts',{}) if re.fullmatch(r'[A-Za-z0-9:_-]{1,80}',k)),'entries':sorted(entries),'dockerfile':(root/'Dockerfile').is_file() and not (root/'Dockerfile').is_symlink(),'git':(root/'.git').exists()}
+
+def build_target(root,target):
+    kind=BUILD_CONFIG.get('kind')
+    if kind=='docker' and BUILD_CONFIG.get('skipDocker'):return
+    if (target/'package.json').exists() and kind!='docker':
+        if not (target/'package-lock.json').exists():raise ValueError('Node projects require package-lock.json')
+        command(target,['/usr/bin/env','npm','ci'],300)
+        package=json.loads((target/'package.json').read_text())
+        scripts=([BUILD_CONFIG.get('testScript'),BUILD_CONFIG.get('buildScript')] if BUILD_CONFIG else ['test','build'])
+        for script in scripts:
+            if script and BUILD_CONFIG and script not in package.get('scripts',{}):raise ValueError('Configured build/test script is missing in the new release')
+            if script and script in package.get('scripts',{}):command(target,['/usr/bin/env','npm','run',script],300)
+    elif not (target/'Dockerfile').exists() and not (BUILD_CONFIG.get('mode')=='entry'):raise ValueError('Expected Node package.json or Dockerfile')
+    if (target/'Dockerfile').exists() and (kind=='docker' or not BUILD_CONFIG):
+        image='ubuntu-project-'+root.name+':'+target.name
+        command(target,['/usr/bin/docker','build','-t',image,'.'],300)
+        (target/'.control-image').write_text(image)
+
+def snapshot(root):
+    global GITHUB_TOKEN
+    GITHUB_TOKEN=None
+    releases=root/'.control-releases';releases.mkdir(exist_ok=True)
+    staging=releases/('snapshot-'+str(time.time_ns()));staging.mkdir()
+    digest=hashlib.sha256()
+    def copy(directory,relative=pathlib.Path()):
+        for entry in sorted(directory.iterdir()):
+            if entry.name.startswith('.') or entry.name in ('node_modules','shared','current','data','secrets','credentials') or entry.is_symlink() or entry.suffix.lower() in ('.env','.pem','.key','.sqlite','.db'):continue
+            rel=relative/entry.name;dest=staging/rel
+            if entry.is_dir():dest.mkdir();copy(entry,rel)
+            elif entry.is_file():
+                shutil.copy2(entry,dest);digest.update(str(rel).encode());digest.update(dest.read_bytes())
+    copy(root)
+    commit=digest.hexdigest()[:40];release=str(int(time.time()))+'-'+commit[:10];target=releases/release
+    if target.exists():release=str(time.time_ns())+'-'+commit[:10];target=releases/release
+    staging.rename(target);build_target(root,target);readable_release(releases,target)
+    current=root/'current';previous=os.readlink(current) if current.is_symlink() else None
+    if current.exists() and not current.is_symlink():raise ValueError('current must be a managed symlink')
+    (releases/(release+'.json')).write_text(json.dumps({'previous':previous,'commit':'local-'+commit}))
+    tmp=root/'.control-current';tmp.unlink(missing_ok=True);tmp.symlink_to(target);tmp.replace(current)
+    return {'release':release,'commit':'local-'+commit,'rollbackAvailable':previous is not None}
+
 def execute(root,action,args):
     global GITHUB_TOKEN
+    if action=='options':return options(root)
+    if action=='snapshot':return snapshot(root)
+    if action=='clear-current':
+        current=root/'current'
+        if current.is_symlink():current.unlink()
+        elif current.exists():raise ValueError('current is not a managed symlink')
+        return {'cleared':True}
+    if action=='select-release':
+        release=args[0]
+        if not re.fullmatch(r'\d+-[a-f0-9]{10}',release):raise ValueError('Invalid release')
+        target=root/'.control-releases'/release
+        if target.is_symlink() or not target.is_dir():raise ValueError('Invalid release directory')
+        tmp=root/'.control-current';tmp.unlink(missing_ok=True);tmp.symlink_to(target);tmp.replace(root/'current')
+        return {'selected':release}
+    if action=='head':
+        repo=repository(git(root,'remote','get-url','origin'));branch=git(root,'branch','--show-current')
+        if os.environ.get('UC_EXPECTED_REPO') and repo!=os.environ['UC_EXPECTED_REPO']:raise ValueError('Repository differs from the authorized configuration')
+        if os.environ.get('UC_EXPECTED_BRANCH') and branch!=os.environ['UC_EXPECTED_BRANCH']:raise ValueError('Branch differs from the authorized configuration')
+        output=network_command(root,['/usr/bin/git','ls-remote','--exit-code','--heads',repo,'refs/heads/'+branch])
+        found=re.fullmatch(r'([a-f0-9]{40})\s+refs/heads/'+re.escape(branch),output)
+        if not found:raise ValueError('Remote branch was not found')
+        return {'sha':found[1],'notModified':False}
     if action=='qr':
         f=root/'shared/whatsapp/qr.json'
         if f.is_symlink() or f.stat().st_size>10000: raise ValueError('Invalid QR payload')
@@ -100,27 +186,15 @@ def execute(root,action,args):
         GITHUB_TOKEN=None  # Build/test lifecycle scripts never receive Git credentials.
         if git(root,'rev-parse','refs/remotes/origin/'+s['branch'])!=expected: raise ValueError('Remote changed; preview again')
         releases.mkdir(exist_ok=True)
-        release=str(int(time.time()))+'-'+expected[:10]
+        release=str(time.time_ns())+'-'+expected[:10]
         target=releases/release
         previous=os.readlink(current) if current.is_symlink() else None
         if previous and not pathlib.Path(previous).resolve().is_relative_to(releases.resolve()): raise ValueError('Current release is outside the managed release directory')
         if current.exists() and not current.is_symlink(): raise ValueError('current must be a managed symlink')
         git(root,'worktree','add','--detach',str(target),expected)
         try:
-            # Build/test code executes as project user only, after explicit administrator approval.
-            if (target/'package.json').exists():
-                if not (target/'package-lock.json').exists(): raise ValueError('Node projects require package-lock.json')
-                command(target,['/usr/bin/env','npm','ci'],300)
-                package=json.loads((target/'package.json').read_text())
-                for script in ('test','build'):
-                    if script in package.get('scripts',{}): command(target,['/usr/bin/env','npm','run',script],300)
-            elif not (target/'Dockerfile').exists():
-                raise ValueError('Expected Node package.json or Dockerfile')
-            # Docker projects use an operator-provisioned rootless Docker service; never build as root.
-            if (target/'Dockerfile').exists():
-                image='ubuntu-project-'+root.name+':'+release
-                command(target,['/usr/bin/docker','build','-t',image,'.'],300)
-                (target/'.control-image').write_text(image)
+            build_target(root,target)
+            readable_release(releases,target)
             (releases/(release+'.json')).write_text(json.dumps({'previous':previous,'commit':expected}))
             tmp=root/'.control-current'; tmp.symlink_to(target); tmp.replace(current)
             return {'release':release,'commit':expected,'rollbackAvailable':previous is not None}
@@ -137,14 +211,19 @@ def execute(root,action,args):
             return {'restored':False}
         if not pathlib.Path(previous).resolve().is_relative_to(releases.resolve()): raise ValueError('Invalid previous release')
         tmp=root/'.control-current'; tmp.symlink_to(previous); tmp.replace(current)
-        return {'restored':True}
+        prior=pathlib.Path(previous)
+        metadata=json.loads((releases/(prior.name+'.json')).read_text())
+        return {'restored':True,'release':prior.name,'commit':metadata['commit']}
     raise ValueError('Unsupported project operation')
 
 if __name__=='__main__':
     try:
-        if os.environ.pop('UC_GITHUB_AUTH_STDIN',None)=='1':
+        BUILD_CONFIG=json.loads(os.environ.pop('UC_RUNTIME_BUILD','{}'))
+        has_token=os.environ.pop('UC_GITHUB_AUTH_STDIN',None)=='1'
+        has_input=os.environ.pop('UC_RUNNER_INPUT',None)=='1'
+        if has_token or has_input:
             # Anonymous stdin pipe from the helper, never an argv/env token.
-            GITHUB_TOKEN=json.loads(sys.stdin.readline(32768))['token']
+            body=json.loads(sys.stdin.readline(1048576));GITHUB_TOKEN=body.get('token');BUILD_ENV=body.get('build_env',{})
             import ctypes
             ctypes.CDLL(None).prctl(4,0,0,0,0)  # PR_SET_DUMPABLE=0 on Linux.
         print(json.dumps(execute(pathlib.Path(sys.argv[1]).resolve(),sys.argv[2],sys.argv[3:])))

@@ -23,6 +23,10 @@ export function openDatabase(dir) {
         db.exec("ALTER TABLE projects ADD COLUMN auth TEXT NOT NULL DEFAULT 'deploy-key'");
     if (!columns.has('github_repository_id'))
         db.exec('ALTER TABLE projects ADD COLUMN github_repository_id INTEGER');
+    if (!columns.has('lifecycle_json'))
+        db.exec("ALTER TABLE projects ADD COLUMN lifecycle_json TEXT NOT NULL DEFAULT '{}'");
+    if (!columns.has('update_state'))
+        db.exec("ALTER TABLE projects ADD COLUMN update_state TEXT NOT NULL DEFAULT '{}'");
     const jobColumns = new Set(
         db
             .prepare('PRAGMA table_info(jobs)')

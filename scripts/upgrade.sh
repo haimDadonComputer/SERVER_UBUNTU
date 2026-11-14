@@ -25,6 +25,9 @@ DATA_DIR=$(node --env-file=/etc/ubuntu-control/app.env -p 'require("path").resol
 [[ -d $DATA_DIR && -f $DATA_DIR/control.sqlite ]] || { echo 'Existing database not found; nothing changed'; exit 1; }
 check_idle() {
   [[ ! -e /var/lib/ubuntu-control-helper/pending.json ]] || { echo 'Confirm/rollback the pending firewall change before upgrading'; return 1; }
+  for transaction in /var/lib/ubuntu-control-helper/runtime-transactions/*.json; do
+    [[ ! -f $transaction ]] || { echo 'A project operation or recovery is pending. Inspect the helper and finish recovery before upgrading.'; return 1; }
+  done
   python3 - "$DATA_DIR/control.sqlite" <<'PY'
 import pathlib,sqlite3,sys
 db=sqlite3.connect(pathlib.Path(sys.argv[1]).resolve().as_uri()+'?mode=ro',uri=True)
@@ -102,6 +105,14 @@ if [[ $BROKER_ACTIVE == active ]]; then systemctl stop ubuntu-control-github.ser
 check_idle
 cp -a /etc/ubuntu-control "$BACKUP_DIR/etc-ubuntu-control"
 cp -a /var/lib/ubuntu-control-helper "$BACKUP_DIR/helper-state"
+# Runtime units are regenerated from the root registry. Preserve their current
+# definitions for diagnosis; never convert/start/stop individual projects here.
+install -d -m 0700 "$BACKUP_DIR/managed-units"
+for unit in /run/systemd/system/uc-project-*.service; do
+  [[ ! -f $unit || -L $unit ]] || cp -a -- "$unit" "$BACKUP_DIR/managed-units/"
+done
+install -d -m 0700 -o root -g root /etc/ubuntu-control/projects
+install -d -m 0755 -o root -g root /var/lib/ubuntu-control-projects
 if [[ -d /var/lib/ubuntu-control-github ]]; then cp -a /var/lib/ubuntu-control-github "$BACKUP_DIR/github-state"; fi
 python3 - "$DATA_DIR/control.sqlite" "$BACKUP_DIR/control.sqlite" <<'PY'
 import pathlib,sqlite3,sys
@@ -127,7 +138,9 @@ for i in {1..20}; do
   if systemctl is-active --quiet ubuntu-control-github.service ubuntu-control-helper.service ubuntu-control.service && curl --silent --fail http://127.0.0.1:3080/api/health >/dev/null; then
     trap - ERR
     echo "Upgrade complete. Root-only backups: $BACKUP_DIR"
-    echo 'Open Settings > GitHub App, enter App ID and Installation ID, save and test the connection.'
+    echo 'Existing users, GitHub settings, projects and update policies were preserved.'
+    echo 'Review Project > Runtime settings. Existing projects remain manual and unconverted.'
+    echo 'Validate Node/Docker deployment and rollback on a test project before enabling automatic updates.'
     exit 0
   fi
   sleep 1

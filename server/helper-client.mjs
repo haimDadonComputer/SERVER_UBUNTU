@@ -5,7 +5,15 @@ export function helperCall(socket, action, args = {}) {
         const c = net.createConnection(socket);
         c.setEncoding('utf8');
         let data = '';
-        c.setTimeout(action === 'project-deploy' ? 900000 : 180000);
+        c.setTimeout(
+            ['project-deploy', 'project-start', 'project-restart', 'project-activate'].includes(
+                action
+            )
+                ? 2400000
+                : action === 'project-rollback'
+                  ? 300000
+                  : 180000
+        );
         c.on('connect', () => c.write(JSON.stringify({ action, args }) + '\n'));
         c.on('data', (b) => {
             data += b;

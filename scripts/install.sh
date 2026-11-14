@@ -23,6 +23,7 @@ install -d -m 0700 -o ubuntu-control -g ubuntu-control /var/lib/ubuntu-control
 install -d -m 0700 -o root -g root /var/lib/ubuntu-control-helper
 install -d -m 0750 -o root -g ubuntu-control /etc/ubuntu-control
 install -d -m 0700 -o root -g root /etc/ubuntu-control/projects
+install -d -m 0755 -o root -g root /var/lib/ubuntu-control-projects
 install -d -m 0750 -o root -g ubuntu-projects /srv/ubuntu-projects
 install -d -m 0755 -o root -g root /opt/ubuntu-control
 # Copy only known source paths; never copy .env, data, Git credentials or node_modules.

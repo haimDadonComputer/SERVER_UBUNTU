@@ -32,17 +32,19 @@ class GitHubError(ValueError):
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
 
-def http_request(method, route, bearer, body=None):
+def http_request(method, route, bearer, body=None,extra_headers=None):
     # Only fixed API routes constructed by the broker, never a client URL.
     if not route.startswith('/') or '://' in route: raise ValueError('Invalid GitHub route')
     request=urllib.request.Request('https://api.github.com'+route,method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={'Authorization':'Bearer '+bearer,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':API_VERSION,'Content-Type':'application/json','User-Agent':'Ubuntu-Control-GitHub-App'})
+        headers={'Authorization':'Bearer '+bearer,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':API_VERSION,'Content-Type':'application/json','User-Agent':'Ubuntu-Control-GitHub-App',**(extra_headers or {})})
     try:
         with urllib.request.build_opener(NoRedirect).open(request,timeout=25) as response:
             raw=response.read(16000000)
+            if extra_headers and extra_headers.get('Accept')=='application/vnd.github.sha':return {'sha':raw.decode().strip(),'etag':response.headers.get('ETag')}
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
+        if e.code==304:e.close();return {'notModified':True}
         retry=e.headers.get('Retry-After')
         request_id=e.headers.get('X-GitHub-Request-Id')
         if request_id and not re.fullmatch(r'[A-Za-z0-9:-]{1,100}',request_id):request_id=None
@@ -179,6 +181,21 @@ class GitHubApp:
         if action=='repository-token':
             repo=self.repository(args['repositoryId'])
             return {'repository':repo,'token':self.token(repo['id'])}
+        if action=='head':
+            import urllib.parse
+            identifier=positive_id(args.get('repositoryId'));name=args.get('fullName','');branch=args.get('branch','')
+            if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',name) or not isinstance(branch,str) or not branch or len(branch)>101:raise ValueError('Invalid repository head request')
+            # The read-only token is scoped by repository ID; permissions are enforced by GitHub.
+            headers={'Accept':'application/vnd.github.sha'}
+            etag=args.get('etag')
+            if etag and isinstance(etag,str) and len(etag)<200 and not any(ord(c)<32 for c in etag):headers['If-None-Match']=etag
+            path='/repos/'+name+'/commits/'+urllib.parse.quote(branch,safe='')
+            try:result=self.request('GET',path,self.token(identifier),None,headers)
+            except GitHubError as e:
+                if e.status!=401:raise
+                result=self.request('GET',path,self.token(identifier,force=True),None,headers)
+            if not result.get('notModified') and not re.fullmatch(r'[a-f0-9]{40}',result.get('sha','')):raise GitHubError(502)
+            return result
         raise ValueError('Unsupported GitHub broker action')
 
 def serve():

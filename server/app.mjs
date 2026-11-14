@@ -14,6 +14,7 @@ import { Queue } from './queue.mjs';
 import { listFiles, readFile, writeFile, createDirectory, deleteEntry } from './files.mjs';
 import { metrics } from './metrics.mjs';
 import { sanitizeDetails, storedDetails } from './diagnostics.mjs';
+import { registerLifecycle, reconcileProjects, projectView } from './project-lifecycle.mjs';
 
 const credentials = z.object({
     username: z.string().min(3).max(64),
@@ -241,7 +242,10 @@ export async function createApp({ db, config, helper }) {
             .enum(['start', 'stop', 'restart', 'enable', 'disable'])
             .parse(req.body.operation);
         if (req.body.confirmed !== true) throw new Error('נדרש אישור לכל הפורטים של השירות');
-        const id = queue.add('service:' + req.params.id, async (stage) => {
+        const resource = req.params.id.startsWith('uc:')
+            ? 'project:' + req.params.id.slice(3)
+            : 'service:' + req.params.id;
+        const id = queue.add(resource, async (stage) => {
             stage('מעדכן שירות');
             await helper('service', { service: req.params.id, operation, confirmed: true });
             audit(db, req.session.username, 'service-' + operation, req.params.id);
@@ -356,7 +360,17 @@ export async function createApp({ db, config, helper }) {
         });
         res.status(202).json({ job });
     });
-    app.get('/api/projects', (_req, res) => res.json(db.prepare('SELECT * FROM projects').all()));
+    app.get('/api/projects', async (req, res) => {
+        await reconcileProjects(db, helper).catch(() => {});
+        const state = req.query.state === 'archived' ? 'archived' : 'active';
+        res.json(
+            db
+                .prepare('SELECT * FROM projects')
+                .all()
+                .map(projectView)
+                .filter((p) => p.lifecycle === state)
+        );
+    });
     app.get('/api/projects/authorized', async (_req, res) =>
         res.json(await helper('project-authorized'))
     );
@@ -386,8 +400,17 @@ export async function createApp({ db, config, helper }) {
         const p = db.prepare('SELECT * FROM projects WHERE id=?').get(id);
         if (!p) return res.status(404).json({ error: 'הפרויקט לא נמצא' });
         req.project = p;
+        const view = projectView(p);
+        if (
+            view.lifecycle !== 'active' &&
+            /^\/api\/projects\/[^/]+\/(?:files|file|directory|download|git|preview|clone|deploy|pull|env)\/?$/.test(
+                req.path
+            )
+        )
+            return res.status(409).json({ error: 'הפרויקט בארכיון. יש לשחזר אותו תחילה.' });
         next();
     });
+    registerLifecycle({ app, db, helper, queue, reauth });
     app.get('/api/projects/:project/qr', async (req, res) =>
         res.json(await helper('project-qr', { project: req.project.id }))
     );
@@ -440,6 +463,8 @@ export async function createApp({ db, config, helper }) {
         });
     app.post('/api/projects/:project/env', async (req, res) => {
         await reauth(req);
+        if (queue.locks.has('project:' + req.project.id))
+            return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
         const values = z.record(z.string(), z.string().max(8192)).parse(req.body.values);
         await helper('project-env', { project: req.project.id, values });
         audit(db, req.session.username, 'project-env', req.project.id);

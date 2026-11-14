@@ -6,12 +6,19 @@ import { createApp } from './app.mjs';
 import { helperCall } from './helper-client.mjs';
 import { sessionFromRequest, redact } from './security.mjs';
 import { metrics } from './metrics.mjs';
+import { ProjectUpdater } from './project-updater.mjs';
+import { reconcileProjects } from './project-lifecycle.mjs';
+import { installProjectLogs } from './project-log-stream.mjs';
 validateConfig();
 const db = openDatabase(config.data),
     helper = (a, b) => helperCall(config.socket, a, b);
-const { app } = await createApp({ db, config, helper });
+const { app, queue } = await createApp({ db, config, helper });
+await reconcileProjects(db, helper).catch(() => {});
+const updater = new ProjectUpdater({ db, helper, queue });
+updater.start();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 2048 });
+const stopProjectLogs = installProjectLogs({ wss, db, socketPath: config.socket });
 server.on('upgrade', (req, socket, head) => {
     if (
         req.url !== '/ws' ||
@@ -105,9 +112,12 @@ server.listen(config.port, config.host, () =>
     console.log(`Ubuntu Control listening on ${config.host}:${config.port}`)
 );
 function shutdown() {
+    stopProjectLogs();
+    updater.stop();
     clearInterval(timer);
     for (const ws of wss.clients) ws.close(1001);
-    server.close(() => {
+    server.close(async () => {
+        await queue.tail;
         db.close();
         process.exit(0);
     });

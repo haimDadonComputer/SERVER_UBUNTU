@@ -9,6 +9,8 @@ import { openDatabase } from '../../server/db.mjs';
 import { createApp } from '../../server/app.mjs';
 import argon2 from 'argon2';
 let server: http.Server, dir: string, db: any, base: string;
+const rootRecords = new Map<string, any>(),
+    environments = new Map<string, Record<string, string>>();
 test.beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-ui-'));
     db = openDatabase(dir);
@@ -31,6 +33,84 @@ test.beforeAll(async () => {
             port: 3080,
         },
         helper: async (action: string, args: any) => {
+            if (action === 'project-records') return [...rootRecords.values()];
+            if (action === 'project-options')
+                return {
+                    scripts: ['start', 'build'],
+                    entries: ['index.mjs'],
+                    git: false,
+                    dockerfile: false,
+                };
+            if (action === 'project-env-meta')
+                return {
+                    keys: Object.keys(environments.get(args.project) || {}),
+                    publicBuild: [],
+                    restartRequired: false,
+                };
+            if (action === 'project-env-patch') {
+                const values = { ...environments.get(args.project), ...args.set };
+                for (const key of args.unset) delete values[key];
+                environments.set(args.project, values);
+                return {
+                    keys: Object.keys(values),
+                    publicBuild: args.publicBuild || [],
+                    restartRequired: true,
+                };
+            }
+            if (action === 'project-log-history')
+                return [
+                    {
+                        type: 'project-log',
+                        cursor: 's=one',
+                        time: new Date().toISOString(),
+                        level: 'info',
+                        text: 'filtered runtime log',
+                    },
+                ];
+            if (
+                [
+                    'project-runtime',
+                    'project-start',
+                    'project-stop',
+                    'project-restart',
+                    'project-activate',
+                    'project-archive',
+                    'project-restore',
+                    'project-updates',
+                ].includes(action)
+            ) {
+                const p = { ...rootRecords.get(args.project) };
+                if (action === 'project-runtime')
+                    Object.assign(p, {
+                        runtime: args.runtime,
+                        service: 'uc:' + args.project,
+                        ownership: 'managed',
+                        desired: 'stopped',
+                    });
+                if (['project-start', 'project-restart', 'project-activate'].includes(action))
+                    Object.assign(p, {
+                        desired: 'running',
+                        activeCommit: 'a'.repeat(40),
+                        preparedCommit: 'a'.repeat(40),
+                        deployment: 'healthy',
+                    });
+                if (action === 'project-stop') p.desired = 'stopped';
+                if (action === 'project-archive')
+                    Object.assign(p, {
+                        lifecycle: 'archived',
+                        updates: 'manual',
+                        desired: 'stopped',
+                    });
+                if (action === 'project-restore')
+                    Object.assign(p, {
+                        lifecycle: 'active',
+                        updates: 'manual',
+                        desired: 'stopped',
+                    });
+                if (action === 'project-updates') p.updates = args.mode;
+                rootRecords.set(args.project, p);
+                return p;
+            }
             if (
                 action === 'github-status' ||
                 action === 'github-check' ||
@@ -70,7 +150,8 @@ test.beforeAll(async () => {
             if (action === 'github-import') {
                 const root = path.join(dir, args.id);
                 await fs.mkdir(root, { recursive: true });
-                return {
+                const record = {
+                    id: args.id,
                     root,
                     kind: 'node',
                     repo: 'https://github.com/owner/private-app.git',
@@ -78,6 +159,8 @@ test.beforeAll(async () => {
                     auth: 'github-app',
                     github_repository_id: 7,
                 };
+                rootRecords.set(args.id, record);
+                return record;
             }
             if (action === 'project-clone') {
                 await fs.writeFile(
@@ -102,7 +185,8 @@ test.beforeAll(async () => {
             if (action === 'project-create') {
                 const root = path.join(dir, args.id);
                 await fs.mkdir(root);
-                return {
+                const record = {
+                    id: args.id,
                     root,
                     kind: args.kind,
                     repo: args.repo || null,
@@ -110,6 +194,8 @@ test.beforeAll(async () => {
                     service: null,
                     health_port: null,
                 };
+                rootRecords.set(args.id, record);
+                return record;
             }
             throw Object.assign(
                 new Error('System helper is not installed in this Windows UI test'),
@@ -231,5 +317,64 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
     ).toBeTruthy();
     await page.screenshot({ path: 'test-results/dashboard-mobile.png', fullPage: true });
+    expect(errors).toEqual([]);
+});
+
+test('project runtime, private environment metadata, console and archive restoration', async ({
+    page,
+}) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(base);
+    await page.locator('input[name=username]').fill('test-admin');
+    await page.locator('input[name=password]').fill('test-only-long-password');
+    await page.getByRole('button', { name: 'כניסה מאובטחת' }).click();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await page.getByRole('button', { name: 'הוספת פרויקט', exact: true }).first().click();
+    await page.locator('input[name=id]').fill('lifecycle-demo');
+    await page.locator('input[name=name]').fill('מחזור חיים');
+    await page.getByRole('button', { name: 'אישור ושמירה' }).click();
+    const card = page
+        .locator('.project-card')
+        .filter({ has: page.getByRole('heading', { name: 'מחזור חיים', exact: true }) });
+    await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
+    await dialog.getByLabel('בדיקת תקינות').selectOption('process');
+    await page.screenshot({ path: 'test-results/project-runtime.png', fullPage: true });
+    await dialog.getByRole('button', { name: 'שמירת הגדרות הפעלה' }).click();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
+    await card.getByRole('button', { name: 'משתני סביבה', exact: true }).click();
+    await dialog.getByRole('button', { name: 'הוספת משתנה' }).click();
+    await dialog.getByLabel('שם משתנה 0').fill('API_KEY');
+    await dialog.getByLabel('ערך חדש API_KEY').fill('browser-test-private-value');
+    await dialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
+    await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
+    await expect(dialog.getByLabel('ערך חדש API_KEY')).toHaveValue('');
+    await expect(dialog.getByText('browser-test-private-value')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
+    await card.getByRole('button', { name: 'קונסול הפרויקט', exact: true }).click();
+    await expect(page.getByText('filtered runtime log')).toBeVisible();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await card.getByRole('button', { name: 'העברה לארכיון', exact: true }).click();
+    await dialog.getByLabel('להמשך הקלידו lifecycle-demo').fill('lifecycle-demo');
+    await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await page.getByRole('button', { name: /^ארכיון \(/ }).click();
+    await expect(card.getByRole('button', { name: 'מחיקה לצמיתות', exact: true })).toBeVisible();
+    await page.screenshot({ path: 'test-results/project-archive.png', fullPage: true });
+    await card.getByRole('button', { name: 'שחזור מהארכיון', exact: true }).click();
+    await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await page.getByRole('button', { name: 'פרויקטים פעילים', exact: true }).click();
+    await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
+    await expect(card.getByText(/שירות: כבוי/)).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
+    ).toBeTruthy();
+    await page.screenshot({ path: 'test-results/projects-mobile.png', fullPage: true });
     expect(errors).toEqual([]);
 });

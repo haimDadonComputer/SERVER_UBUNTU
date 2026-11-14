@@ -15,4 +15,4 @@ jobs:
       - run: npm run build
       - run: for script in scripts/*.sh tests/install-permissions.sh; do bash -n "$script"; done
       - run: sudo env "PATH=$PATH" bash tests/install-permissions.sh
-      - run: python3 -m py_compile helper/*.py helper/github-askpass
+      - run: python3 -m py_compile helper/*.py helper/github-askpass scripts/acceptance-runtime.py

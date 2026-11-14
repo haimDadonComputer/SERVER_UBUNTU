@@ -3,9 +3,13 @@
 import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib, tempfile
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
 from diagnostics import failure,decode,exception_details,OperationError,clean
+from project_lifecycle import Lifecycle,dispatch_lifecycle,READ_ACTIONS,MUTATIONS,REGISTRY_LOCK,BUILD_LOCK,PROJECT_LOCKS,project_lock,rehydrate,recover_transactions
+from project_logs import ProjectLogHub
+PROJECT_LOG_HUB=None
 
 CONFIG = '/etc/ubuntu-control/helper.json'
 LOCK = threading.RLock()
+FIREWALL_WORK=threading.Event()
 ENV = {'PATH': '/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_COLORS': '0'}
 
 def run(argv, timeout=20, check=True, input_text=None):
@@ -31,6 +35,9 @@ def load_config():
     return json.loads(p.read_text())
 
 def service(cfg, identifier):
+    if isinstance(identifier,str) and identifier.startswith('uc:'):
+        project_id=project_identifier(identifier[3:]);p=all_projects(cfg).get(project_id,{})
+        if p.get('ownership')=='managed' and p.get('lifecycle','active')=='active':return {'id':identifier,'kind':'systemd','name':Lifecycle(cfg,globals()).names(project_id)['unit']}
     for item in cfg.get('services', []):
         if item['id'] == identifier:
             if item['kind'] == 'systemd' and re.fullmatch(r'[A-Za-z0-9_.@:-]+\.service', item['name']):
@@ -83,7 +90,8 @@ def inventory(cfg):
     pm = []
     if cfg.get('pm2_enabled'):
         pm = json.loads(pm2(cfg, ['jlist']))
-    for entry in cfg.get('services', []):
+    entries=[*cfg.get('services',[]),*[{'id':v['service']} for v in all_projects(cfg).values() if v.get('ownership')=='managed' and v.get('lifecycle','active')=='active']]
+    for entry in entries:
         item = service(cfg, entry['id'])
         state, pid, cwd = 'unknown', None, None
         if item['kind'] == 'systemd':
@@ -276,12 +284,25 @@ def write_project_registry(cfg,registry):
         with os.fdopen(fd,'w') as stream:
             json.dump(registry,stream);stream.flush();os.fsync(stream.fileno())
         os.replace(name,state/'projects.json')
+        if os.name=='posix':
+            directory=os.open(state,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(directory)
+            finally:os.close(directory)
     finally:
         if os.path.exists(name): os.unlink(name)
 
 def all_projects(cfg):
     # Preserve existing installations. Static entries keep their operator settings.
-    return {**read_project_registry(cfg),**cfg.get('projects',{})}
+    registry=read_project_registry(cfg)
+    result={**registry,**cfg.get('projects',{})}
+    lifecycle_keys={'operationId','runtime','runtimePending','ownership','lifecycle','desired','updates','remoteCommit','preparedCommit','activeCommit','failedCommit','checkedAt','deployedAt','deployment','archivedAt','archive','publicBuild','envPending','externalService','release','image'}
+    for identifier,static in cfg.get('projects',{}).items():
+        override=registry.get(identifier,{})
+        result[identifier]={**static,**{k:v for k,v in override.items() if k in lifecycle_keys}}
+        if override.get('ownership')=='managed':
+            result[identifier]['service']='uc:'+identifier
+            result[identifier]['kind']=override['runtime']['kind'];result[identifier]['health_port']=override['runtime'].get('port')
+    return result
 
 def make_project_directory(cfg,identifier):
     import pwd,grp
@@ -311,8 +332,10 @@ def make_project_directory(cfg,identifier):
 
 def create_project(cfg,args):
     identifier=project_identifier(args.get('id'))
+    if Lifecycle(cfg,globals()).transaction_path(identifier).exists():raise ValueError('Project recovery is pending')
     existing=all_projects(cfg).get(identifier)
-    if existing: return project(cfg,identifier)
+    if existing and existing.get('lifecycle')!='deleted': return project(cfg,identifier)
+    if existing and identifier in cfg.get('projects',{}):raise ValueError('Remove the old static project configuration before reusing its name')
     kind=args.get('kind','node')
     if kind not in ('node','docker'): raise ValueError('Invalid project runtime')
     repo=args.get('repo') or ''
@@ -335,6 +358,7 @@ def project(cfg, identifier):
     project_identifier(identifier)
     p = all_projects(cfg).get(identifier)
     if not p: raise ValueError('Project was not found; add it through the website')
+    if p.get('lifecycle','active')!='active':raise ValueError('Project is archived or deleted')
     root = pathlib.Path(p['root'])
     base = pathlib.Path(cfg.get('project_root', '/srv/ubuntu-projects')).resolve()
     if not root.is_absolute() or root.is_symlink() or not root.resolve().is_relative_to(base) or root.resolve() == base:
@@ -357,6 +381,16 @@ def github_broker(action,args=None):
     if not result.get('ok'):raise OperationError(result.get('error','GitHub request failed'),result.get('details') or {'code':'GITHUB_BROKER','stage':action})
     return result['data']
 
+def project_failure_logs(cfg,identifier):
+    records=ProjectLogHub(cfg,globals()).history(identifier)
+    return '\n'.join(record['time']+' ['+record['level']+'] '+record['text'] for record in records[-80:])
+
+def build_run(unit,user,group,argv,timeout,input_text=None):
+    if not re.fullmatch(r'uc-build-[a-f0-9]{16}-(?:source|image)\.service',unit):raise ValueError('Invalid managed build unit')
+    # PID1 kills the complete build cgroup on exit/timeout. The helper does not
+    # gain CAP_KILL or expose a general transient-unit endpoint to the web.
+    return run(['/usr/bin/systemd-run','--unit='+unit,'--pipe','--wait','--collect','--quiet','--property=User='+user,'--property=Group='+group,'--property=UMask=0007','--property=KillMode=control-group','--property=NoNewPrivileges=true','--property=RuntimeMaxSec='+str(int(timeout)),'--property=TimeoutStopSec=15','--working-directory=/','--',*argv],timeout=timeout+40,input_text=input_text)
+
 def import_github_project(cfg,args):
     identifier=project_identifier(args.get('id'))
     repo=github_broker('repository',{'repositoryId':args.get('repositoryId')})
@@ -374,18 +408,43 @@ def project_run(cfg, p, args, timeout=30):
     # Run a fixed, root-owned runner as the isolated project user. It drops all web/helper privileges.
     env=['/usr/bin/env','UC_EXPECTED_REPO='+(p.get('repo') or ''),'UC_EXPECTED_BRANCH='+(p.get('branch') or 'main')]
     credential_input=None
+    if p.get('ownership')=='managed':
+        runtime=p['runtime'];env+=['UC_RUNTIME_BUILD='+json.dumps({'kind':runtime['kind'],'mode':runtime.get('mode'),'testScript':runtime.get('testScript',''),'buildScript':runtime.get('buildScript',''),'skipDocker':True})]
+    if args[0] in ('deploy','snapshot'):
+        values=Lifecycle(cfg,globals()).metadata_values(p)
+        credential_input=json.dumps({'build_env':values})+'\n';env+=['UC_RUNNER_INPUT=1']
     if p.get('auth')=='github-app' and args[0] in ('clone','preview','deploy','pull'):
         lease=github_broker('repository-token',{'repositoryId':p['github_repository_id']})
         if lease['repository']['clone_url']!=p['repo']:raise ValueError('כתובת המאגר השתנתה. יש לייבא מחדש לתיקייה חדשה.')
-        credential_input=json.dumps({'token':lease['token']})+'\n'
+        body=json.loads(credential_input) if credential_input else {}
+        credential_input=json.dumps({**body,'token':lease['token']})+'\n'
         env+=['UC_GITHUB_AUTH_STDIN=1']
-    if p.get('kind')=='docker':
+    if p.get('kind')=='docker' and p.get('ownership')!='managed':
         import pwd
         uid=pwd.getpwnam(cfg.get('project_user','ubuntu-projects')).pw_uid
         env+=['DOCKER_HOST=unix:///run/user/%d/docker.sock'%uid,'XDG_RUNTIME_DIR=/run/user/%d'%uid]
-    return run(['/usr/sbin/runuser', '-u', cfg.get('project_user','ubuntu-projects'), '--', *env, '/usr/bin/python3', '/opt/ubuntu-control/helper/project_runner.py', p['root'], *args], timeout=timeout, input_text=credential_input)
+    argv=[*env,'/usr/bin/python3','/opt/ubuntu-control/helper/project_runner.py',p['root'],*args]
+    if args[0] in ('deploy','snapshot'):
+        life=Lifecycle(cfg,globals());unit=life.names(life.identifier(p))['build']+'-source.service'
+        return build_run(unit,cfg.get('project_user','ubuntu-projects'),cfg.get('project_group','ubuntu-projects'),argv,timeout,credential_input)
+    return run(['/usr/sbin/runuser', '-u', cfg.get('project_user','ubuntu-projects'), '--', *argv], timeout=timeout, input_text=credential_input)
 
 def dispatch(cfg, action, args):
+    global PROJECT_LOG_HUB
+    if action in ('project-clone','project-pull','project-rollback') and Lifecycle(cfg,globals()).transaction_path(project_identifier(args.get('project'))).exists():raise ValueError('Project recovery is pending')
+    pending_file = pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'pending.json'
+    if (pending_file.exists() or FIREWALL_WORK.is_set()) and action in (MUTATIONS | {'project-deploy','project-clone','project-rollback','service'}):
+        raise ValueError('Confirm or roll back the pending firewall transaction first')
+    if action=='project-log-history':
+        with REGISTRY_LOCK:
+            if PROJECT_LOG_HUB is None:PROJECT_LOG_HUB=ProjectLogHub(cfg,globals())
+        return PROJECT_LOG_HUB.history(args['project'],args.get('cursor'))
+    if action in READ_ACTIONS or action in MUTATIONS:return dispatch_lifecycle(cfg,action,args,globals())
+    if action=='service' and str(args.get('service','')).startswith('uc:'):
+        if not args.get('confirmed'):raise ValueError('Explicit confirmation required')
+        return dispatch_lifecycle(cfg,'project-'+args['operation'],{'project':args['service'][3:]},globals())
+    if action=='project-deploy' and project(cfg,args['project']).get('ownership')=='managed':
+        return dispatch_lifecycle(cfg,'project-activate',args,globals())
     if action in ('github-status','github-configure','github-check','github-repositories','github-disconnect'):
         return github_broker(action.removeprefix('github-'),args)
     if action=='github-import':return import_github_project(cfg,args)
@@ -395,9 +454,18 @@ def dispatch(cfg, action, args):
     if action == 'inventory': return inventory(cfg)
     if action == 'project-create': return create_project(cfg,args)
     if action == 'service': return service_action(cfg, args)
-    if action == 'logs': return logs(cfg, args)
+    if action == 'logs':
+        text=logs(cfg,args);life=Lifecycle(cfg,globals())
+        for identifier,p in all_projects(cfg).items():
+            if p.get('service')==args.get('service') and p.get('lifecycle')!='deleted':text=life.redact(identifier,text)
+        return text
     if action == 'firewall-status': return firewall_status(cfg)
-    if action == 'firewall-change': return firewall_change(cfg, args)
+    if action == 'firewall-change':
+        with REGISTRY_LOCK:
+            if any(lock.locked() for lock in PROJECT_LOCKS.values()):raise ValueError('Wait for active project/service operations before changing the firewall')
+            FIREWALL_WORK.set()
+        try:return firewall_change(cfg,args)
+        finally:FIREWALL_WORK.clear()
     if action == 'firewall-rollback': rollback(cfg, args['transaction']); return {'restored':True}
     if action == 'firewall-confirm':
         f = pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'pending.json'
@@ -408,11 +476,13 @@ def dispatch(cfg, action, args):
     if action == 'project-qr':
         p=project(cfg,args['project'])
         if not p.get('qr_enabled'): raise ValueError('QR integration is not enabled for this project')
+        if p.get('ownership')=='managed' and p.get('runtime',{}).get('kind')=='node':return Lifecycle(cfg,globals()).qr(args['project'])
         return json.loads(project_run(cfg,p,['qr']))
     if action == 'project-releases': return json.loads(project_run(cfg,project(cfg,args['project']),['releases']))
     if action == 'project-rollback':
         p=project(cfg,args['project'])
         if not args.get('confirmed'): raise ValueError('Explicit rollback confirmation required')
+        if p.get('ownership')=='managed':return Lifecycle(cfg,globals()).rollback_release(args['project'],args['release'])
         result=json.loads(project_run(cfg,p,['rollback',args['release']],120))
         if not result['restored']: raise ValueError('No previous release is available')
         service_action(cfg,{'service':p['service'],'operation':'restart','confirmed':True})
@@ -449,16 +519,12 @@ def dispatch(cfg, action, args):
             service_action(cfg, {'service':p['service'],'operation':'stop','confirmed':True})
             raise ValueError('First deployment failed; no previous release exists and the service was stopped') from None
     if action == 'project-env':
-        p = project(cfg,args['project']); values = args.get('values',{})
-        if len(values)>100 or any(not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}',k) or not isinstance(v,str) or len(v)>8192 or '\n' in v or '\r' in v or '\x00' in v for k,v in values.items()): raise ValueError('Invalid environment values')
-        target = pathlib.Path('/etc/ubuntu-control/projects')
-        target.mkdir(mode=0o700,exist_ok=True)
-        # JSON-quoted values are compatible with systemd EnvironmentFile quoting for ordinary values.
-        content = '\n'.join(k+'='+json.dumps(v,ensure_ascii=False) for k,v in values.items())+'\n'
-        f = target/(args['project']+'.env'); f.write_text(content); f.chmod(0o600)
-        return {'saved':True, 'restartRequired':True}
+        # Keep the replacement endpoint compatible, with the same atomic validation.
+        life=Lifecycle(cfg,globals());identifier=args['project'];values=args.get('values',{})
+        old=life.metadata(identifier)
+        return life.environment(identifier,{'set':values,'unset':[k for k in old['keys'] if k not in values],'publicBuild':[k for k in old['publicBuild'] if k in values]})
     if action == 'project-authorized':
-        return {k:{key:v.get(key) for key in ('root','service','repo','branch','health_port','kind')} for k,v in all_projects(cfg).items()}
+        return {k:{key:v.get(key) for key in ('root','service','repo','branch','health_port','kind')} for k,v in all_projects(cfg).items() if v.get('lifecycle','active')=='active'}
     raise ValueError('Unsupported helper action')
 
 def watchdog(cfg):
@@ -481,7 +547,9 @@ def serve():
     import pwd, grp
     os.chown(socket_path,0,grp.getgrnam(cfg.get('web_group','ubuntu-control')).gr_gid)
     allowed = pwd.getpwnam(cfg.get('web_user','ubuntu-control')).pw_uid
+    recover_transactions(cfg,globals())
     threading.Thread(target=watchdog,args=(cfg,),daemon=True).start()
+    threading.Thread(target=rehydrate,args=(cfg,globals()),daemon=True).start()
     server.listen(16)
     def client(conn):
         with conn:
@@ -497,7 +565,26 @@ def serve():
                     if len(data)>100000: raise ValueError('Request too large')
                 request=json.loads(data.split(b'\n')[0])
                 if not isinstance(request,dict) or not isinstance(request.get('action'),str) or len(request['action'])>80 or not isinstance(request.get('args',{}),dict):raise ValueError('Invalid helper request')
-                with LOCK: result=dispatch(cfg,request['action'],request.get('args',{}))
+                action=request['action'];args=request.get('args',{})
+                # Read-only and long-running project work never holds the firewall lock.
+                if action=='project-log-stream':
+                    global PROJECT_LOG_HUB
+                    with REGISTRY_LOCK:
+                        if PROJECT_LOG_HUB is None:PROJECT_LOG_HUB=ProjectLogHub(cfg,globals())
+                    PROJECT_LOG_HUB.serve(conn,args);return
+                if action.startswith('firewall-'):
+                    with LOCK:result=dispatch(cfg,action,args)
+                elif action in ('project-clone','project-pull','project-rollback'):
+                    with project_lock(project_identifier(args.get('project'))):result=dispatch(cfg,action,args)
+                elif action=='project-deploy' and project(cfg,args['project']).get('ownership')!='managed':
+                    with project_lock(args['project']),BUILD_LOCK:result=dispatch(cfg,action,args)
+                elif action in ('project-create','github-import'):
+                    with REGISTRY_LOCK:result=dispatch(cfg,action,args)
+                elif action=='service' and not str(args.get('service','')).startswith('uc:'):
+                    with project_lock('service:'+str(args.get('service',''))):result=dispatch(cfg,action,args)
+                elif action=='project-env':
+                    with project_lock(args['project']):result=dispatch(cfg,action,args)
+                else:result=dispatch(cfg,action,args)
                 conn.sendall((json.dumps({'ok':True,'data':result})+'\n').encode())
             except Exception as e:
                 # Exception text is limited to controlled validation/system errors, never subprocess output.

@@ -25,6 +25,20 @@ const credentials = z.object({
 const projectInput = z.object({
     id: z.string().regex(/^[a-z][a-z0-9-]{1,40}$/),
     name: z.string().min(1).max(80),
+    kind: z.enum(['node', 'docker']).default('node'),
+    repo: z
+        .string()
+        .max(300)
+        .regex(
+            /^(?:(?:https:\/\/github\.com\/|git@github\.com:)[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/
+        )
+        .default(''),
+    branch: z.string().max(101).default('main'),
+    service: z.string().max(100).default(''),
+    health_port: z.preprocess(
+        (v) => (v === '' || v == null ? undefined : Number(v)),
+        z.number().int().min(1024).max(65535).optional()
+    ),
 });
 export async function createApp({ db, config, helper }) {
     const app = express(),
@@ -275,9 +289,9 @@ export async function createApp({ db, config, helper }) {
     );
     app.post('/api/projects', async (req, res) => {
         const input = projectInput.parse(req.body);
-        const authorized = await helper('project-authorized');
-        const p = authorized[input.id];
-        if (!p) throw new Error('יש לאשר תחילה את הפרויקט בקובץ התצורה של ה־helper');
+        if (db.prepare('SELECT id FROM projects WHERE id=?').get(input.id))
+            return res.status(409).json({ error: 'פרויקט בשם תיקייה זה כבר קיים. בחרו שם אחר.' });
+        const p = await helper('project-create', input);
         if (!path.isAbsolute(p.root) || !p.root.startsWith(config.projects + path.sep))
             throw new Error('Project outside configured root');
         db.prepare(

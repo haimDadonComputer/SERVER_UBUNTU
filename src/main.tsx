@@ -291,15 +291,51 @@ function App() {
     function projectModal() {
         setModal(
             <Form
-                title="הוספת פרויקט מורשה"
+                title="יצירת תיקיית פרויקט"
                 fields={[
-                    { key: 'id', label: 'מזהה מתוך helper.json', placeholder: 'my-app' },
+                    { key: 'id', label: 'שם תיקייה באנגלית', placeholder: 'my-app' },
                     { key: 'name', label: 'שם לתצוגה', placeholder: 'האפליקציה שלי' },
+                    {
+                        key: 'repo',
+                        label: 'מאגר GitHub (לא חובה)',
+                        placeholder: 'https://github.com/org/repo.git',
+                        required: false,
+                    },
+                    {
+                        key: 'branch',
+                        label: 'ענף Git (ברירת מחדל: main)',
+                        placeholder: 'main',
+                        required: false,
+                    },
+                    {
+                        key: 'kind',
+                        label: 'סוג הפרויקט',
+                        type: 'select',
+                        options: [
+                            ['node', 'Node.js'],
+                            ['docker', 'Docker'],
+                        ],
+                    },
+                    {
+                        key: 'service',
+                        label: 'שיוך שירות קיים (לא חובה)',
+                        type: 'select',
+                        options: [
+                            ['', 'ללא שירות — תיקייה וקבצים בלבד'],
+                            ...(inv.services || []).map((s: Any) => [s.id, s.name]),
+                        ],
+                    },
+                    {
+                        key: 'health_port',
+                        label: 'פורט בדיקת תקינות (נדרש אם משייכים שירות)',
+                        type: 'number',
+                        required: false,
+                    },
                 ]}
-                description="מנהל השרת מאשר מראש תיקייה, שירות ומאגר בקובץ התצורה. כך הממשק אינו יכול לקבל הרשאות על תיקיות או שירותים נוספים."
+                description="התיקייה תיווצר תחת תיקיית הפרויקטים של השרת. אפשר להוסיף כמה פרויקטים ישירות מכאן, ללא עריכת קובץ תצורה. אם כבר קיימת תיקייה באותו שם, היא תיפתח בלי למחוק את תוכנה."
                 onClose={() => setModal(null)}
                 submit={async (values: Any) => {
-                    await api('/projects', 'POST', values);
+                    await api('/projects', 'POST', { ...values, branch: values.branch || 'main' });
                     setModal(null);
                     await refresh();
                 }}
@@ -1161,7 +1197,14 @@ function App() {
                                             <div className="project-controls">
                                                 <button
                                                     className="secondary"
-                                                    disabled={pending}
+                                                    disabled={
+                                                        pending || !p.service || !p.health_port
+                                                    }
+                                                    title={
+                                                        !p.service
+                                                            ? 'נדרש שיוך שירות לצורך פריסה; ניהול הקבצים זמין כבר עכשיו'
+                                                            : undefined
+                                                    }
                                                     onClick={() => deploy(p)}
                                                 >
                                                     <RefreshCw size={14} />
@@ -1175,11 +1218,12 @@ function App() {
                                                 </button>
                                                 <button
                                                     className="text-btn"
+                                                    disabled={!p.repo}
                                                     onClick={() =>
                                                         setModal(
                                                             <Confirm
                                                                 title="התקנת מאגר"
-                                                                text="ישוכפל המאגר שהוגדר בקובץ התצורה לתיקיית פרויקט ריקה בלבד. לשימוש במאגר פרטי יש להגדיר Deploy Key אצל משתמש הפרויקטים."
+                                                                text="ישוכפל המאגר שנבחר בפרויקט לתיקייה ריקה בלבד. לשימוש במאגר פרטי יש להגדיר Deploy Key אצל משתמש הפרויקטים."
                                                                 onClose={() => setModal(null)}
                                                                 onConfirm={() => {
                                                                     setModal(null);
@@ -1345,7 +1389,7 @@ function App() {
                                     <Empty
                                         icon={<FolderGit2 />}
                                         text="הפרויקט הראשון שלך מתחיל כאן"
-                                        detail="אשרו פרויקט בשרת, הוסיפו אותו לכאן ונהלו קבצים, גרסאות ושירותים."
+                                        detail="צרו תיקייה לפרויקט ישירות מהאתר והתחילו להעלות ולערוך קבצים. אפשר להוסיף כמה פרויקטים ללא עריכת תצורה."
                                     />
                                     <button className="primary centered" onClick={projectModal}>
                                         <Plus size={16} />
@@ -2186,7 +2230,7 @@ function Form({ title, description, fields, onClose, submit, children }: Any) {
                                 name={f.key}
                                 placeholder={f.placeholder}
                                 type={f.type || 'text'}
-                                required={f.type !== 'checkbox'}
+                                required={f.type !== 'checkbox' && f.required !== false}
                                 autoComplete={f.type === 'password' ? 'current-password' : 'off'}
                                 dir={f.type === 'checkbox' ? undefined : 'auto'}
                             />

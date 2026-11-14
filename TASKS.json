@@ -39,12 +39,19 @@
             "verification": "Linux npm/UID regression test added to Ubuntu CI; local Windows verification recorded in VALIDATION.md"
         },
         {
+            "id": "web-project-folders",
+            "status": "done",
+            "progress": 100,
+            "description": "Create/open multiple project folders through the authenticated site without per-project helper.json entries; persist helper registry and keep existing projects compatible",
+            "verification": "API and Python adapter tests plus browser creation of two projects and file editing; real Ubuntu mkdir/ACL/capability checks still require server validation"
+        },
+        {
             "id": "validation",
             "status": "done",
             "progress": 100,
             "checks": {
                 "node": 8,
-                "python": 13,
+                "python": 18,
                 "browser": 1,
                 "productionBuild": "passed",
                 "dependencyAudit": "0 vulnerabilities"

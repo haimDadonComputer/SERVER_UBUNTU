@@ -33,6 +33,18 @@ test('authentication, CSRF, TOTP, service allowlist adapter and encrypted backup
             if (a === 'service' && b.service === 'allowed') return { state: 'active' };
             if (a === 'service') throw new Error('Not allowlisted');
             if (a === 'inventory') return { ports: [], services: [] };
+            if (a === 'project-create') {
+                const root = path.join(dir, b.id);
+                await fs.mkdir(root);
+                return {
+                    root,
+                    kind: b.kind,
+                    repo: b.repo,
+                    branch: b.branch,
+                    service: null,
+                    health_port: null,
+                };
+            }
             return {};
         },
     });
@@ -84,6 +96,44 @@ test('authentication, CSRF, TOTP, service allowlist adapter and encrypted backup
     assert.match(response.headers.get('set-cookie'), /HttpOnly/);
     assert.match(response.headers.get('set-cookie'), /SameSite=Strict/);
     csrf = (await response.json()).csrf;
+    for (const id of ['project-one', 'project-two']) {
+        assert.equal(
+            (await request('/projects', 'POST', { id, name: id }, { 'X-CSRF-Token': 'wrong' }))
+                .status,
+            403
+        );
+        assert.equal((await request('/projects', 'POST', { id, name: id })).status, 201);
+        assert.ok((await fs.stat(path.join(dir, id))).isDirectory());
+    }
+    assert.equal(
+        (await request('/projects', 'POST', { id: 'project-one', name: 'duplicate' })).status,
+        409
+    );
+    const before = calls.filter(([a]) => a === 'project-create').length;
+    assert.equal(
+        (await request('/projects', 'POST', { id: '../outside', name: 'invalid' })).status,
+        400
+    );
+    assert.equal(calls.filter(([a]) => a === 'project-create').length, before);
+    assert.equal((await (await request('/projects')).json()).length, 2);
+    assert.equal(
+        (
+            await request('/projects/project-one/file', 'POST', {
+                path: 'index.js',
+                content: 'console.log(1)',
+            })
+        ).status,
+        200
+    );
+    assert.equal(
+        (
+            await request('/projects/project-one/file', 'POST', {
+                path: '../outside',
+                content: 'blocked',
+            })
+        ).status,
+        400
+    );
     assert.equal((await request('/inventory')).status, 200);
     assert.equal(
         (

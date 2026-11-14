@@ -30,7 +30,19 @@ test.beforeAll(async () => {
             host: '127.0.0.1',
             port: 3080,
         },
-        helper: async () => {
+        helper: async (action: string, args: any) => {
+            if (action === 'project-create') {
+                const root = path.join(dir, args.id);
+                await fs.mkdir(root);
+                return {
+                    root,
+                    kind: args.kind,
+                    repo: args.repo || null,
+                    branch: args.branch || 'main',
+                    service: null,
+                    health_port: null,
+                };
+            }
             throw Object.assign(
                 new Error('System helper is not installed in this Windows UI test'),
                 { status: 503 }
@@ -68,7 +80,26 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await expect(page.getByRole('heading', { name: 'הפרויקטים שלי' })).toBeVisible();
     await page.getByRole('button', { name: 'הוספת פרויקט' }).first().click();
     await expect(page.getByRole('dialog')).toBeVisible();
-    await page.getByRole('button', { name: 'ביטול', exact: true }).click();
+    await expect(page.getByText('מזהה מתוך helper.json')).toHaveCount(0);
+    await page.locator('input[name=id]').fill('first-project');
+    await page.locator('input[name=name]').fill('פרויקט ראשון');
+    await page.getByRole('button', { name: 'אישור ושמירה' }).click();
+    await expect(page.getByRole('heading', { name: 'פרויקט ראשון' })).toBeVisible();
+    await page.getByRole('button', { name: 'הוספת פרויקט', exact: true }).click();
+    await page.locator('input[name=id]').fill('second-project');
+    await page.locator('input[name=name]').fill('פרויקט שני');
+    await page.getByRole('button', { name: 'אישור ושמירה' }).click();
+    await expect(page.getByRole('heading', { name: 'פרויקט שני' })).toBeVisible();
+    await page.getByRole('button', { name: 'קבצים', exact: true }).first().click();
+    await expect(page.getByText('בחרו קובץ לעריכה')).toBeVisible();
+    await page.getByRole('button', { name: 'קובץ חדש' }).click();
+    await page.locator('input[name=name]').fill('hello.txt');
+    await page.getByRole('button', { name: 'אישור ושמירה' }).click();
+    await page.getByRole('textbox', { name: 'עריכת תוכן הקובץ' }).fill('hello from the browser');
+    await page.getByRole('button', { name: 'שמירה', exact: true }).click();
+    await expect
+        .poll(async () => fs.readFile(path.join(dir, 'first-project', 'hello.txt'), 'utf8'))
+        .toBe('hello from the browser');
     await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'התחברות ואבטחה' })).toBeVisible();
     await page.getByRole('button', { name: 'החלפת ערכת צבעים' }).click();

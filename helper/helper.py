@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Root-owned, local-only privileged boundary. No shell and no caller-supplied commands."""
-import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib
+import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib, tempfile
 
 CONFIG = '/etc/ubuntu-control/helper.json'
 LOCK = threading.RLock()
@@ -239,9 +239,91 @@ def firewall_change(cfg, args):
         rollback(cfg, tx)
         raise
 
+def project_identifier(identifier):
+    if not isinstance(identifier,str) or not re.fullmatch(r'[a-z][a-z0-9-]{1,40}',identifier):
+        raise ValueError('Project folder name must contain 2-41 lowercase letters, digits or hyphens')
+    return identifier
+
+def read_project_registry(cfg):
+    f=pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'projects.json'
+    if not f.exists(): return {}
+    st=f.lstat()
+    if f.is_symlink() or st.st_uid!=0 or st.st_mode & 0o077:
+        raise ValueError('Project registry must be root-owned and private')
+    registry=json.loads(f.read_text())
+    if not isinstance(registry,dict): raise ValueError('Invalid project registry')
+    return registry
+
+def write_project_registry(cfg,registry):
+    state=pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))
+    state.mkdir(mode=0o700,parents=True,exist_ok=True)
+    st=state.lstat()
+    if state.is_symlink() or st.st_uid!=0 or st.st_mode & 0o077:
+        raise ValueError('Helper state directory must be root-owned and private')
+    fd,name=tempfile.mkstemp(prefix='.projects-',dir=state)
+    try:
+        with os.fdopen(fd,'w') as stream:
+            json.dump(registry,stream);stream.flush();os.fsync(stream.fileno())
+        os.replace(name,state/'projects.json')
+    finally:
+        if os.path.exists(name): os.unlink(name)
+
+def all_projects(cfg):
+    # Preserve existing installations. Static entries keep their operator settings.
+    return {**read_project_registry(cfg),**cfg.get('projects',{})}
+
+def make_project_directory(cfg,identifier):
+    import pwd,grp
+    base=pathlib.Path(cfg.get('project_root','/srv/ubuntu-projects'))
+    if not base.is_absolute() or base.is_symlink() or not base.is_dir(): raise ValueError('Project base directory is not available')
+    st=base.stat()
+    if st.st_uid!=0 or st.st_mode & 0o022: raise ValueError('Project base must be root-owned without non-root write access')
+    target=base/identifier
+    # The parent is not writable by project processes, so they cannot replace
+    # this direct child between creation and permission setup.
+    if target.is_symlink(): raise ValueError('Symlink project directories are prohibited')
+    if target.exists():
+        if not target.is_dir(): raise ValueError('Project path is not a directory')
+        return str(target.resolve())
+    uid=pwd.getpwnam(cfg.get('project_user','ubuntu-projects')).pw_uid
+    gid=grp.getgrnam(cfg.get('project_group','ubuntu-projects')).gr_gid
+    target.mkdir(mode=0o700)
+    try:
+        os.chown(target,uid,gid);target.chmod(0o2770)
+        run(['/usr/bin/setfacl','-d','-m','u::rwx,g::rwx,o::---',str(target)])
+    except Exception:
+        # Remove only the empty directory just created; never remove user files.
+        try: target.rmdir()
+        except OSError: pass
+        raise
+    return str(target.resolve())
+
+def create_project(cfg,args):
+    identifier=project_identifier(args.get('id'))
+    existing=all_projects(cfg).get(identifier)
+    if existing: return project(cfg,identifier)
+    kind=args.get('kind','node')
+    if kind not in ('node','docker'): raise ValueError('Invalid project runtime')
+    repo=args.get('repo') or ''
+    if repo and not re.fullmatch(r'(https://github\.com/|git@github\.com:)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repo):
+        raise ValueError('Only credential-free GitHub URLs are supported')
+    branch=args.get('branch') or 'main'
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]{0,100}',branch) or '..' in branch: raise ValueError('Invalid branch')
+    managed=args.get('service') or None
+    if managed: service(cfg,managed)
+    port=args.get('health_port')
+    if port is not None and (isinstance(port,bool) or not isinstance(port,int) or not 1024<=port<=65535): raise ValueError('Invalid health port')
+    if managed and port is None: raise ValueError('A health port is required when linking a service')
+    root=make_project_directory(cfg,identifier)
+    record={'root':root,'kind':kind,'service':managed,'repo':repo or None,'branch':branch,'health_port':port,'qr_enabled':False}
+    registry=read_project_registry(cfg);registry[identifier]=record
+    write_project_registry(cfg,registry)
+    return record
+
 def project(cfg, identifier):
-    p = cfg.get('projects', {}).get(identifier)
-    if not p: raise ValueError('Project must be authorized in helper.json by the operator')
+    project_identifier(identifier)
+    p = all_projects(cfg).get(identifier)
+    if not p: raise ValueError('Project was not found; add it through the website')
     root = pathlib.Path(p['root'])
     base = pathlib.Path(cfg.get('project_root', '/srv/ubuntu-projects')).resolve()
     if not root.is_absolute() or root.is_symlink() or not root.resolve().is_relative_to(base) or root.resolve() == base:
@@ -250,7 +332,7 @@ def project(cfg, identifier):
 
 def project_run(cfg, p, args, timeout=30):
     # Run a fixed, root-owned runner as the isolated project user. It drops all web/helper privileges.
-    env=['/usr/bin/env','UC_EXPECTED_REPO='+p.get('repo',''),'UC_EXPECTED_BRANCH='+p.get('branch','main')]
+    env=['/usr/bin/env','UC_EXPECTED_REPO='+(p.get('repo') or ''),'UC_EXPECTED_BRANCH='+(p.get('branch') or 'main')]
     if p.get('kind')=='docker':
         import pwd
         uid=pwd.getpwnam(cfg.get('project_user','ubuntu-projects')).pw_uid
@@ -262,6 +344,7 @@ def dispatch(cfg, action, args):
     if pending_file.exists() and action in ('project-deploy','project-clone','project-rollback','service'):
         raise ValueError('Confirm or roll back the pending firewall transaction first')
     if action == 'inventory': return inventory(cfg)
+    if action == 'project-create': return create_project(cfg,args)
     if action == 'service': return service_action(cfg, args)
     if action == 'logs': return logs(cfg, args)
     if action == 'firewall-status': return firewall_status(cfg)
@@ -293,6 +376,7 @@ def dispatch(cfg, action, args):
         return json.loads(project_run(cfg, p, ['clone', p.get('repo',''), p.get('branch','main')],120))
     if action == 'project-deploy':
         p = project(cfg,args['project'])
+        if not p.get('service') or not p.get('health_port'): raise ValueError('Link a managed service and health port before deployment')
         if service(cfg,p['service'])['kind'] != 'systemd': raise ValueError('Release deployment requires a systemd service (Node or rootless Docker launcher)')
         if not args.get('confirmed'): raise ValueError('Deployment confirmation required')
         result = json.loads(project_run(cfg,p,['deploy',args['expected']],600))
@@ -322,7 +406,7 @@ def dispatch(cfg, action, args):
         f = target/(args['project']+'.env'); f.write_text(content); f.chmod(0o600)
         return {'saved':True, 'restartRequired':True}
     if action == 'project-authorized':
-        return {k:{key:v.get(key) for key in ('root','service','repo','branch','health_port','kind')} for k,v in cfg.get('projects',{}).items()}
+        return {k:{key:v.get(key) for key in ('root','service','repo','branch','health_port','kind')} for k,v in all_projects(cfg).items()}
     raise ValueError('Unsupported helper action')
 
 def watchdog(cfg):

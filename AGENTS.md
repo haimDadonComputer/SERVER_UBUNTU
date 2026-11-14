@@ -7,6 +7,7 @@
 - The web process is unprivileged. Root operations belong in helper/helper.py with a root-owned allowlist.
 - Require authenticated sessions, same-origin checks and CSRF for every mutation. WebSockets must authenticate and revalidate sessions.
 - Keep secrets out of API responses, logs and Git. Tests use temporary data and adapters only.
+- Every helper/project test fixture must explicitly set state_dir inside its temporary directory, including static-project and invalid-input tests. Never probe the installed /var/lib/ubuntu-control-helper or relax its permissions to make non-root upgrade tests pass. Acceptance scripts must check installed module availability before importing helpers or creating test resources.
 - Project files must remain within authorized roots; reject symlinks, secret paths and protected runtime data.
 - Project folders can be created/opened through the authenticated site under the configured project_root. Do not reintroduce per-project manual helper.json approval. The helper persists these registrations in its private state directory; existing service allowlists remain separate.
 - Never alter existing services/firewalls automatically. Protect management access and retain rollback state.

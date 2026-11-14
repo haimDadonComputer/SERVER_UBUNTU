@@ -345,6 +345,8 @@ sudo bash /home/adminuser/apps/SERVER_UBUNTU/scripts/setup-rootless-docker.sh
 
 הבדיקות המקומיות משתמשות ב־Mocks; הן אינן מאשרות systemd, Docker או GitHub אמיתיים. אחרי השדרוג הריצו ב־Ubuntu:
 
+הריצו בדיקות קבלה רק לאחר שסקריפט השדרוג הסתיים בהצלחה והדפיס `Upgrade complete`. כשל בבדיקות עותק השדרוג עוצר לפני החלפת `/opt/ubuntu-control`; במצב זה המודולים החדשים עדיין אינם מותקנים. תקנו את הכשל והריצו שוב `upgrade.sh`, בלי לשנות הרשאות `/var/lib/ubuntu-control-helper` ובלי להריץ את בדיקות היחידה כ־root כדי לעקוף את הכשל.
+
 ```bash
 sudo python3 /home/adminuser/apps/SERVER_UBUNTU/scripts/acceptance-runtime.py
 ```

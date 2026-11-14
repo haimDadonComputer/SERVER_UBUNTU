@@ -4,13 +4,22 @@
 Run after upgrade: sudo python3 scripts/acceptance-runtime.py [--docker]
 No existing web users, database, settings, firewall or projects are modified.
 """
-import argparse,json,os,pathlib,pwd,shutil,socket,sys,tempfile,urllib.request,uuid
+import argparse,json,os,pathlib,shutil,socket,sys,tempfile,urllib.request,uuid
+
+REQUIRED_HELPER_FILES=('helper.py','project_lifecycle.py','project_logs.py','project_secrets.py','runtime_launcher.py','project_runner.py')
+
+def installed_helper_directory(directory=pathlib.Path('/opt/ubuntu-control/helper')):
+    missing=[name for name in REQUIRED_HELPER_FILES if not (directory/name).is_file()]
+    if missing:
+        raise SystemExit('Runtime acceptance cannot start: installed helper files are missing: '+', '.join(missing)+'. The lifecycle upgrade has not completed. Run scripts/upgrade.sh from the source checkout and wait for "Upgrade complete" before retrying. No test resources were created; checkout modules will not be used as a fallback.')
+    return directory
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--docker',action='store_true');args=parser.parse_args()
     if os.geteuid()!=0:sys.exit('Run with sudo on the upgraded Ubuntu server')
     if 'Ubuntu' not in pathlib.Path('/etc/os-release').read_text():sys.exit('Ubuntu is required')
-    sys.path.insert(0,'/opt/ubuntu-control/helper')
+    sys.path.insert(0,str(installed_helper_directory()))
+    import pwd
     import helper as backend
     from project_lifecycle import Lifecycle
     from project_logs import ProjectLogHub

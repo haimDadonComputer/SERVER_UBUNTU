@@ -86,7 +86,7 @@
             "description": "Managed Node DynamicUser/rootless Docker, runtime credentials and private persistent data, archive/restore/scoped purge, shared bounded consoles, manual/60-second SHA-based automatic deployment, root transaction recovery and additive upgrades",
             "verification": {
                 "node": 22,
-                "pythonTotal": 79,
+                "pythonTotal": 80,
                 "pythonSkippedOnWindows": 6,
                 "browser": 2,
                 "productionBuild": "passed",

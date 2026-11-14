@@ -60,15 +60,26 @@ class LifecycleTests(unittest.TestCase):
         text=self.life.unit_text('demo',p)
         self.assertIn('WorkingDirectory='+str(pathlib.Path(p['root'])/'current').replace('%','%%')+'\n',text)
         self.assertIn('ReadOnlyPaths="/srv/project 100%% code"',text)
+    def test_bind_paths_quotes_components_without_hiding_the_separator(self):
+        p=self.managed();p['root']='/srv/project 100% code'
+        text=self.life.unit_text('demo',p)
+        source='/var/lib/'+self.life.names('demo')['state'];destination=p['root']+'/shared'
+        expected='BindPaths='+json.dumps(source)+':'+json.dumps(destination.replace('%','%%'))
+        self.assertIn(expected+'\n',text)
+        self.assertNotIn('BindPaths='+json.dumps(source+':'+destination.replace('%','%%')),text)
     @unittest.skipUnless(sys.platform=='linux' and shutil.which('systemd-analyze'),'Real systemd parser requires Linux')
     def test_generated_unit_passes_actual_systemd_parser(self):
         p=self.managed();directory=self.base/'verify';directory.mkdir()
         unit=directory/self.life.names('demo')['unit']
         unit.write_text(self.life.unit_text('demo',p).replace('ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','ExecStart=/usr/bin/true'))
         (directory/'ubuntu-control-helper.service').write_text('[Service]\nExecStart=/usr/bin/true\n')
-        env={**os.environ,'SYSTEMD_UNIT_PATH':str(directory)+':/usr/lib/systemd/system:/lib/systemd/system','SYSTEMD_LOG_COLOR':'0'}
+        env={**os.environ,'SYSTEMD_UNIT_PATH':str(directory)+':/usr/lib/systemd/system:/lib/systemd/system','SYSTEMD_LOG_COLOR':'0','SYSTEMD_LOG_LEVEL':'debug'}
         result=subprocess.run(['systemd-analyze','verify',str(unit)],capture_output=True,text=True,env=env,timeout=30)
         self.assertEqual(result.returncode,0,result.stderr)
+        # Syntax verification alone accepts a colon inside a quoted source as a
+        # valid filename. Assert the actual parsed source/destination as well.
+        expected='BindPaths: /var/lib/'+self.life.names('demo')['state']+':'+p['root']+'/shared:rbind'
+        self.assertIn(expected,[line.strip() for line in (result.stdout+result.stderr).splitlines()])
     def test_invalid_first_unit_is_confirmed_inactive_without_hiding_original_failure(self):
         self.managed()
         def release(id,p,expected):p.update(preparedCommit='a'*40,release='1-aaaaaaaaaa');return {'release':p['release'],'commit':p['preparedCommit']}

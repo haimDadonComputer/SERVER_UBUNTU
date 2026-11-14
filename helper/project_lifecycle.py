@@ -188,7 +188,9 @@ class Lifecycle:
             return value.replace('%','%%')
         q=lambda text:json.dumps(scalar(text),ensure_ascii=False)
         lines=['[Unit]','Description=Ubuntu Control project '+identifier,'After=network-online.target ubuntu-control-helper.service','Wants=ubuntu-control-helper.service','[Service]','Type=simple','WorkingDirectory='+scalar(pathlib.Path(p['root'])/'current'),'ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','LoadCredential=launch:'+scalar(launch),'LoadCredential=environment:'+scalar(env),'Restart=on-failure','RestartSec=5','KillMode=control-group','UMask=0077','NoNewPrivileges=true','ProtectSystem=strict','ProtectHome=true','PrivateTmp=true','ProtectKernelTunables=true','ProtectKernelModules=true','ProtectControlGroups=true','RestrictSUIDSGID=true','LimitCORE=0','ReadOnlyPaths='+q(p['root']),'InaccessiblePaths=-/etc/ubuntu-control -/var/lib/ubuntu-control -/var/lib/ubuntu-control-helper -/var/lib/ubuntu-control-github']
-        if r['kind']=='node':lines+=['DynamicUser=true','User=ucp-'+n['key'],'SupplementaryGroups=ubuntu-projects','StateDirectory='+n['state'],'StateDirectoryMode=0700','BindPaths='+q('/var/lib/'+n['state']+':'+p['root']+'/shared'),'ReadWritePaths='+q(p['root']+'/shared'),'InaccessiblePaths=-/var/lib/ubuntu-projects -/var/lib/ubuntu-docker']
+        # BindPaths splits source:destination while unquoting each component.
+        # Quoting the whole pair hides the separator and makes it one source path.
+        if r['kind']=='node':lines+=['DynamicUser=true','User=ucp-'+n['key'],'SupplementaryGroups=ubuntu-projects','StateDirectory='+n['state'],'StateDirectoryMode=0700','BindPaths='+q('/var/lib/'+n['state'])+':'+q(p['root']+'/shared'),'ReadWritePaths='+q(p['root']+'/shared'),'InaccessiblePaths=-/var/lib/ubuntu-projects -/var/lib/ubuntu-docker']
         else:
             import pwd
             docker_uid=pwd.getpwnam('ubuntu-docker').pw_uid

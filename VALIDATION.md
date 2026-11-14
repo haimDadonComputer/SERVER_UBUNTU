@@ -80,3 +80,11 @@ The server journal identified the first real runtime failure: JSON quotes around
 Acceptance now prints and privately stores redacted structured primary and cleanup errors separately, preserves resources when recovery is pending, and reports PASS only after cleanup succeeds. A narrowly scoped --cleanup-state option recovers and removes a single verified root-private acceptance fixture; it never accepts normal project IDs or arbitrary paths. First-deployment rollback confirms a bad-setting/not-found unit is inactive before treating a failed stop as harmless; ambiguous or active states retain the recovery journal.
 
 Local checks after this fix: 22 Node tests and the production build passed; Python ran 79 tests, 73 passed and 6 Linux/POSIX checks skipped. The systemd parser regression is included in the Ubuntu CI test run, but was not executed on this Windows host. The corrected unit still needs runtime acceptance on Contabo; the provided server journal establishes the old quoting failure, not a successful deployment of this fix.
+
+## BindPaths separator fix
+
+The next Contabo acceptance run reached unit startup but failed with 226/NAMESPACE. The journal showed systemd treating the whole source:destination pair as a single source filename because the generator quoted the complete pair. BindPaths now quotes each component separately, exposing the separator. The private StateDirectory, persistent-data location, credentials, read-only source and service isolation are preserved.
+
+A regression covers spaces and percent specifiers. The Linux systemd parser test now inspects the parsed BindPaths mapping from the debug dump; a zero syntax-check exit code alone cannot detect the old valid-but-unintended filename. Local Node/Python/build results are recorded with this fix; actual corrected mount/startup still requires the Ubuntu acceptance rerun. The user's failed run reported only a retained diagnostic directory and no cleanup failure, so the isolated test resources were cleaned while the redacted report remains.
+
+Verified locally: 22 Node tests passed; Python ran 80 tests with 74 passed and 6 Linux/POSIX checks skipped; production build, Python compilation and diff whitespace checks passed. No service security settings or filesystem permissions were relaxed.

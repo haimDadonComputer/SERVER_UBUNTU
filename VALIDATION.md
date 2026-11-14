@@ -1,5 +1,9 @@
 # Verification record — 2026-11-14
 
+## Ubuntu Python command fix — 2026-11-15
+
+User-provided Ubuntu upgrade output confirmed npm ci and all 11 Node tests passed, then the staging helper check stopped because the legacy npm script invoked `python`, which is not installed as an alias on Ubuntu 24.04. Added scripts/check-helper.mjs: it runs python3 on POSIX and python on Windows using argument-array spawnSync, anchors the test working directory to the project root, inherits the environment and propagates a nonzero failure status. No global alias, package installation or privilege change is required. The reported failure happened before the upgrade stopped services or replaced live code. Subsequent local checks are run on Windows; continuation of the full Ubuntu upgrade still requires the user's server.
+
 Environment: Windows, Node.js 24.11.1, Python 3.14, installed Microsoft Edge. No Ubuntu/Hetzner server credentials or connection were supplied.
 
 Passed locally:

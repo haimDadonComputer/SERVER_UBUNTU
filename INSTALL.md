@@ -233,6 +233,8 @@ sudo bash scripts/upgrade.sh
 
 הסקריפט דורש Ubuntu 24.04, Node.js 24.11+, npm, Python, OpenSSL, `setfacl`/`getfacl`, המפתח הקיים בבעלות root והתקנה סטנדרטית קיימת. תלות חסרה תגרום לעצירה לפני החלפת הקוד. אם חסרות חבילות מערכת, התקינו אותן מקומית: `sudo apt-get install acl openssl`. אין שינוי חומת אש, VPN, DNS או Reverse Proxy; הפעולות על Contabo אינן משתמשות ב־Hetzner API.
 
+בדיקות ה־helper משתמשות אוטומטית ב־`python3` על Ubuntu וב־`python` על Windows באמצעות `scripts/check-helper.mjs`. אין צורך להתקין `python-is-python3`, ליצור symlink או להרחיב הרשאות. אם גרסה קודמת של השדרוג נעצרה עם `python: not found`, ההתקנה הפעילה עדיין לא הוחלפה. משכו את התיקון מ־GitHub והריצו שוב `sudo bash scripts/upgrade.sh`; אין צורך למחוק תיקיות staging או להריץ התקנה ראשונית.
+
 תהליך השדרוג:
 
 1. מוודא שאין משימות queued/running או שינוי Firewall שממתין לאישור.

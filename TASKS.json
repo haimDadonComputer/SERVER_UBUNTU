@@ -1,5 +1,5 @@
 {
-    "updated": "2026-11-14",
+    "updated": "2026-11-15",
     "phases": [
         {
             "id": "architecture",
@@ -51,6 +51,11 @@
             "progress": 100,
             "description": "Dedicated unprivileged PEM/JWT/token broker, installation repository browser/import, read-only scoped Git credentials, renewal/revocation/rotation, code-only pulls, and staged existing-install upgrade",
             "verification": "Mock GitHub API, credential isolation and authenticated API tests; browser private-repository import passed. Real installation/PEM/Ubuntu service integration pending. POSIX Git askpass test runs in Linux CI."
+        },
+        {
+            "id": "ubuntu-python3-helper-tests",
+            "status": "done",
+            "description": "Use a Node launcher to select python3 on Ubuntu and python on Windows; propagate test failures without shell or system-wide aliases"
         },
         {
             "id": "validation",

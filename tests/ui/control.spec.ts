@@ -31,6 +31,61 @@ test.beforeAll(async () => {
             port: 3080,
         },
         helper: async (action: string, args: any) => {
+            if (
+                action === 'github-status' ||
+                action === 'github-check' ||
+                action === 'github-configure'
+            )
+                return {
+                    appId: '123',
+                    installationId: '456',
+                    enabled: true,
+                    pemPath: '/etc/ubuntu-control/github/app.pem',
+                    connection: 'connected',
+                    checkedAt: '2026-11-14T00:00:00Z',
+                };
+            if (action === 'github-repositories')
+                return [
+                    {
+                        id: 7,
+                        name: 'private-app',
+                        full_name: 'owner/private-app',
+                        description: 'Private application',
+                        private: true,
+                        default_branch: 'stable',
+                        updated_at: '2026-11-14T00:00:00Z',
+                        archived: false,
+                    },
+                    {
+                        id: 8,
+                        name: 'public-app',
+                        full_name: 'owner/public-app',
+                        description: 'Public application',
+                        private: false,
+                        default_branch: 'main',
+                        updated_at: '2026-11-13T00:00:00Z',
+                        archived: false,
+                    },
+                ];
+            if (action === 'github-import') {
+                const root = path.join(dir, args.id);
+                await fs.mkdir(root, { recursive: true });
+                return {
+                    root,
+                    kind: 'node',
+                    repo: 'https://github.com/owner/private-app.git',
+                    branch: 'stable',
+                    auth: 'github-app',
+                    github_repository_id: 7,
+                };
+            }
+            if (action === 'project-clone') {
+                await fs.writeFile(
+                    path.join(dir, args.project, 'README.txt'),
+                    'Mock GitHub import for browser QA'
+                );
+                return {};
+            }
             if (action === 'project-create') {
                 const root = path.join(dir, args.id);
                 await fs.mkdir(root);
@@ -102,6 +157,31 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
         .toBe('hello from the browser');
     await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'התחברות ואבטחה' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'GitHub App', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'בדיקת חיבור', exact: true }).click();
+    await expect(page.getByLabel('GitHub App ID')).toHaveValue('123');
+    await page
+        .getByRole('heading', { name: 'GitHub App', exact: true })
+        .locator('..')
+        .locator('..')
+        .screenshot({ path: 'test-results/github-settings.png' });
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await page.getByRole('button', { name: 'ייבוא מ־GitHub', exact: true }).click();
+    await expect(page.getByText('owner/private-app', { exact: true })).toBeVisible();
+    await page.getByLabel('סינון מאגרים').selectOption('private');
+    await expect(page.getByText('owner/public-app', { exact: true })).toHaveCount(0);
+    await page.getByLabel('חיפוש מאגרי GitHub').fill('private');
+    await page.getByRole('button').filter({ hasText: 'owner/private-app' }).click();
+    await page.getByRole('checkbox').check();
+    await page.getByRole('dialog').screenshot({ path: 'test-results/github-import.png' });
+    await page.getByRole('button', { name: 'ייבוא המאגר', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'משימות רקע', exact: true })).toBeVisible();
+    await expect
+        .poll(async () =>
+            fs.readFile(path.join(dir, 'private-app', 'README.txt'), 'utf8').catch(() => '')
+        )
+        .toContain('Mock GitHub import');
+    await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
     await page.getByRole('button', { name: 'החלפת ערכת צבעים' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     await page.setViewportSize({ width: 390, height: 844 });

@@ -37,6 +37,7 @@ import {
     Loader2,
 } from 'lucide-react';
 import './style.css';
+import { GitHubSettings, GitHubImport } from './github';
 type Any = Record<string, any>;
 let csrf = '';
 async function api(url: string, method = 'GET', body?: unknown) {
@@ -208,6 +209,9 @@ function App() {
         const interval = setInterval(() => {
             api('/jobs')
                 .then(setJobs)
+                .catch(() => {});
+            api('/projects')
+                .then(setProjects)
                 .catch(() => {});
         }, 5000);
         return () => {
@@ -1141,6 +1145,31 @@ function App() {
                                     <Plus size={17} />
                                     הוספת פרויקט
                                 </button>
+                                <button
+                                    className="secondary"
+                                    onClick={() =>
+                                        setModal(
+                                            <Info
+                                                title="ייבוא מ־GitHub"
+                                                onClose={() => setModal(null)}
+                                            >
+                                                <GitHubImport
+                                                    services={inv.services || []}
+                                                    api={api}
+                                                    projects={projects}
+                                                    onDone={() => {
+                                                        setModal(null);
+                                                        setPage('jobs');
+                                                        void refresh();
+                                                    }}
+                                                />
+                                            </Info>
+                                        )
+                                    }
+                                >
+                                    <GitBranch size={17} />
+                                    ייבוא מ־GitHub
+                                </button>
                             </div>
                             <div className="project-grid">
                                 {projects
@@ -1243,6 +1272,31 @@ function App() {
                                                 </button>
                                             </div>
                                             <div className="project-controls">
+                                                <button
+                                                    className="text-btn"
+                                                    disabled={pending || !p.repo}
+                                                    onClick={() =>
+                                                        setModal(
+                                                            <Confirm
+                                                                title="משיכת קוד בלבד"
+                                                                text="הקוד המקומי יעודכן רק אם ניתן לבצע fast-forward וללא שינויים מקומיים. תישמר הפניה לגרסה הקודמת. השירות הפעיל, הבנייה והנתונים לא ישתנו."
+                                                                onClose={() => setModal(null)}
+                                                                onConfirm={() => {
+                                                                    setModal(null);
+                                                                    void run(() =>
+                                                                        api(
+                                                                            `/projects/${p.id}/pull`,
+                                                                            'POST',
+                                                                            { confirmed: true }
+                                                                        )
+                                                                    );
+                                                                }}
+                                                            />
+                                                        )
+                                                    }
+                                                >
+                                                    משיכת קוד בלבד
+                                                </button>
                                                 <button
                                                     className="text-btn"
                                                     onClick={() =>
@@ -1735,6 +1789,7 @@ function App() {
                     {page === 'settings' && (
                         <>
                             <div className="settings-grid">
+                                <GitHubSettings api={api} totpEnabled={!!user.totpEnabled} />
                                 <section className="panel">
                                     <div className="panel-heading">
                                         <h2>

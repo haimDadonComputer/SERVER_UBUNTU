@@ -45,7 +45,10 @@ export function redact(text) {
             '$1[REDACTED]'
         )
         .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[REDACTED]@')
-        .replace(/\b(?:gh[pousr]_[\w]+|github_pat_[\w]+)\b/g, '[REDACTED]');
+        .replace(
+            /\b(?:gh[pousr]_[\w.\-]+|github_pat_[\w.\-]+|eyJ[\w\-]+\.[\w\-]+\.[\w\-]+)\b/g,
+            '[REDACTED]'
+        );
 }
 export function sessionFromRequest(req, db, { touch = false } = {}) {
     const raw = (req.headers.cookie || '')

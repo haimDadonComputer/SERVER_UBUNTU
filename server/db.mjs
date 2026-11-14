@@ -13,6 +13,16 @@ export function openDatabase(dir) {
  CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,resource TEXT,status TEXT,stage TEXT,created TEXT DEFAULT CURRENT_TIMESTAMP,finished TEXT,error TEXT);
  CREATE TABLE IF NOT EXISTS attempts(ip TEXT PRIMARY KEY,count INTEGER,until INTEGER);
  `);
+    const columns = new Set(
+        db
+            .prepare('PRAGMA table_info(projects)')
+            .all()
+            .map((c) => c.name)
+    );
+    if (!columns.has('auth'))
+        db.exec("ALTER TABLE projects ADD COLUMN auth TEXT NOT NULL DEFAULT 'deploy-key'");
+    if (!columns.has('github_repository_id'))
+        db.exec('ALTER TABLE projects ADD COLUMN github_repository_id INTEGER');
     db.exec(
         "UPDATE jobs SET status='interrupted',error='Application restarted; inspect project state before retrying' WHERE status IN ('queued','running')"
     );

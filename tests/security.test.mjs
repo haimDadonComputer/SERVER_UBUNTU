@@ -6,6 +6,7 @@ import path from 'node:path';
 import { seal, unseal, redact, sessionFromRequest, hash } from '../server/security.mjs';
 import { safeRelative, writeFile, readFile, listFiles, deleteEntry } from '../server/files.mjs';
 import { openDatabase } from '../server/db.mjs';
+import { DatabaseSync } from 'node:sqlite';
 import { Queue } from '../server/queue.mjs';
 test('AES-GCM encryption authenticates ciphertext and key', () => {
     const key = 'a1'.repeat(32);
@@ -17,12 +18,52 @@ test('AES-GCM encryption authenticates ciphertext and key', () => {
     p[1] = '00'.repeat(16);
     assert.throws(() => unseal(p.join('.'), key));
 });
+test('GitHub schema migration preserves existing projects and settings', async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-migration-'));
+    const old = new DatabaseSync(path.join(root, 'control.sqlite'));
+    old.exec(`CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,root TEXT UNIQUE NOT NULL,service TEXT,kind TEXT NOT NULL,repo TEXT,branch TEXT,health_port INTEGER,last_sync TEXT);
+     CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);`);
+    old.prepare('INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?)').run(
+        'existing',
+        'Existing',
+        '/srv/ubuntu-projects/existing',
+        'existing-service',
+        'node',
+        'git@github.com:owner/repo.git',
+        'main',
+        3000,
+        '2026-11-14'
+    );
+    old.prepare('INSERT INTO settings VALUES(?,?)').run('existing-config', 'preserved');
+    old.close();
+    const db = openDatabase(root);
+    t.after(async () => {
+        db.close();
+        await fs.rm(root, { recursive: true, force: true });
+    });
+    const p = db.prepare('SELECT * FROM projects WHERE id=?').get('existing');
+    assert.equal(p.auth, 'deploy-key');
+    assert.equal(p.github_repository_id, null);
+    assert.equal(p.service, 'existing-service');
+    assert.equal(p.last_sync, '2026-11-14');
+    assert.equal(p.repo, 'git@github.com:owner/repo.git');
+    assert.equal(
+        db.prepare('SELECT value FROM settings WHERE key=?').get('existing-config').value,
+        'preserved'
+    );
+});
 test('redact common secrets, bearer credentials and GitHub tokens', () => {
     const result = redact(
         'password=hunter2 token=abcdef Authorization: Bearer abcdef ghp_abcdefghij https://name:secret@github.com/a/b'
     );
     for (const value of ['hunter2', 'abcdef', 'ghp_abcdefghij', 'name:secret'])
         assert.ok(!result.includes(value));
+});
+test('redact dotted installation tokens and signed JWTs', () => {
+    const input = 'ghs_123.payload.signature eyJhbGciOiJSUzI1NiJ9.payload.signature';
+    const result = redact(input);
+    assert.ok(!result.includes('payload'));
+    assert.ok(!result.includes('signature'));
 });
 test('reject traversal and protected runtime/secrets paths', () => {
     for (const value of [

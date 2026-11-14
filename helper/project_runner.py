@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 """Unprivileged, fixed Git/release workflow; invoked only by the helper."""
 import os, sys, json, subprocess, pathlib, re, time
+from git_credentials import credentials
+
+GITHUB_TOKEN=None
 
 def command(root, argv, timeout=240):
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='https:ssh', GIT_SSH_COMMAND='/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes', npm_config_audit='false')
@@ -9,6 +12,21 @@ def command(root, argv, timeout=240):
     return p.stdout.strip()
 
 def git(root, *args): return command(root,['/usr/bin/git','-c','core.hooksPath=/dev/null',*args])
+
+def network_command(root,argv):
+    if not GITHUB_TOKEN:return command(root,[argv[0],'-c','core.hooksPath=/dev/null',*argv[1:]])
+    expected=repository(os.environ['UC_EXPECTED_REPO'])
+    if not expected.startswith('https://github.com/'):raise ValueError('GitHub App requires canonical HTTPS URLs')
+    with credentials(expected,GITHUB_TOKEN) as auth_env:
+        env=dict(os.environ,**auth_env)
+        # Reset configured credential helpers/headers and disable redirects. Askpass
+        # checks the exact host + repository path, including URL rewrite attempts.
+        argv=[argv[0],'-c','core.hooksPath=/dev/null','-c','credential.helper=','-c','credential.username=x-access-token','-c','credential.useHttpPath=true','-c','http.followRedirects=false','-c','http.extraHeader=',*argv[1:]]
+        p=subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=240)
+        if p.returncode:raise ValueError('GitHub clone/fetch failed; verify installation permissions, repository branch and empty destination (command output withheld)')
+        return p.stdout.strip()
+
+def fetch(root,*args):return network_command(root,['/usr/bin/git','fetch',*args])
 
 def repository(value):
     if not re.fullmatch(r'(https://github\.com/|git@github\.com:)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?',value): raise ValueError('Only credential-free GitHub repositories are supported')
@@ -25,6 +43,7 @@ def status(root):
     return {'repo':remote,'branch':branch,'commit':current,'dirty':dirty,'remoteCommit':upstream or None,'remoteChecked':False}
 
 def execute(root,action,args):
+    global GITHUB_TOKEN
     if action=='qr':
         f=root/'shared/whatsapp/qr.json'
         if f.is_symlink() or f.stat().st_size>10000: raise ValueError('Invalid QR payload')
@@ -42,16 +61,26 @@ def execute(root,action,args):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]{0,100}',branch) or '..' in branch: raise ValueError('Invalid branch')
         if root.exists() and any(root.iterdir()): raise ValueError('Project directory must be empty')
         root.mkdir(parents=True,exist_ok=True)
-        command(root,['/usr/bin/git','-c','core.hooksPath=/dev/null','clone','--branch',branch,'--',repo,'.'])
+        network_command(root,['/usr/bin/git','clone','--branch',branch,'--',repo,'.'])
         return status(root)
     if action=='status': return status(root)
     if action=='preview':
         s=status(root)
         if s['dirty']: raise ValueError('Local changes must be committed or saved before deployment')
-        git(root,'fetch','--prune','origin')
+        fetch(root,'--prune','origin')
         remote=git(root,'rev-parse','refs/remotes/origin/'+s['branch'])
         changes=git(root,'log','--format=%h %s',s['commit']+'..'+remote)
         return {**s,'remoteCommit':remote,'remoteChecked':True,'changes':changes}
+    if action=='pull':
+        s=status(root)
+        if s['dirty']:raise ValueError('Local changes prevent pull')
+        fetch(root,'origin')
+        GITHUB_TOKEN=None
+        # Preserve a local ref before fast-forward; never reset, force or push.
+        backup='control-backup-'+str(time.time_ns())
+        git(root,'branch',backup,s['commit'])
+        git(root,'merge','--ff-only','refs/remotes/origin/'+s['branch'])
+        return {**status(root),'backupBranch':backup,'codeOnly':True}
     releases=root/'.control-releases'
     current=root/'current'
     if action=='deploy':
@@ -59,7 +88,8 @@ def execute(root,action,args):
         if s['dirty']: raise ValueError('Local modifications prevent deployment')
         expected=args[0]
         if not re.fullmatch(r'[a-f0-9]{40}',expected): raise ValueError('Invalid expected commit')
-        git(root,'fetch','origin')
+        fetch(root,'origin')
+        GITHUB_TOKEN=None  # Build/test lifecycle scripts never receive Git credentials.
         if git(root,'rev-parse','refs/remotes/origin/'+s['branch'])!=expected: raise ValueError('Remote changed; preview again')
         releases.mkdir(exist_ok=True)
         release=str(int(time.time()))+'-'+expected[:10]
@@ -103,6 +133,12 @@ def execute(root,action,args):
     raise ValueError('Unsupported project operation')
 
 if __name__=='__main__':
-    try: print(json.dumps(execute(pathlib.Path(sys.argv[1]).resolve(),sys.argv[2],sys.argv[3:])))
+    try:
+        if os.environ.pop('UC_GITHUB_AUTH_STDIN',None)=='1':
+            # Anonymous stdin pipe from the helper, never an argv/env token.
+            GITHUB_TOKEN=json.loads(sys.stdin.readline(32768))['token']
+            import ctypes
+            ctypes.CDLL(None).prctl(4,0,0,0,0)  # PR_SET_DUMPABLE=0 on Linux.
+        print(json.dumps(execute(pathlib.Path(sys.argv[1]).resolve(),sys.argv[2],sys.argv[3:])))
     except Exception as e:
         print(str(e),file=sys.stderr); sys.exit(1)

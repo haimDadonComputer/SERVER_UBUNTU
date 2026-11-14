@@ -39,6 +39,7 @@ runuser -u ubuntu-control -- npm test
 runuser -u ubuntu-control -- npm run build
 runuser -u ubuntu-control -- npm prune --omit=dev --package-lock=false
 lock_install_tree /opt/ubuntu-control
+chmod 0755 /opt/ubuntu-control/helper/github-askpass
 install -m 0600 deploy/helper.example.json /etc/ubuntu-control/helper.json
 MASTER_KEY=$(openssl rand -hex 32)
 cat > /etc/ubuntu-control/app.env <<EOF
@@ -59,10 +60,14 @@ NODE_BINARY=$(command -v node)
 [[ $NODE_BINARY == /usr/bin/node || $NODE_BINARY == /usr/local/bin/node ]] || { echo 'Node must be installed system-wide under /usr/bin or /usr/local/bin'; exit 1; }
 sed "s|/usr/bin/node|$NODE_BINARY|g" deploy/ubuntu-control.service > /etc/systemd/system/ubuntu-control.service
 install -m 0644 deploy/ubuntu-control-helper.service /etc/systemd/system/ubuntu-control-helper.service
+bash scripts/github-access.sh
+install -m 0644 deploy/ubuntu-control-github.service /etc/systemd/system/ubuntu-control-github.service
+install -d -m 0755 /etc/systemd/system/ubuntu-control-helper.service.d
+install -m 0644 deploy/github-helper.conf /etc/systemd/system/ubuntu-control-helper.service.d/20-github-app.conf
 echo 'Create the initial administrator. The password is not echoed.'
 runuser -u ubuntu-control -- "$NODE_BINARY" --env-file=/etc/ubuntu-control/app.env server/admin.mjs
 systemctl daemon-reload
-systemctl enable --now ubuntu-control-helper.service ubuntu-control.service
+systemctl enable --now ubuntu-control-github.service ubuntu-control-helper.service ubuntu-control.service
 for i in {1..20}; do
   if curl --silent --fail http://127.0.0.1:3080/api/health >/dev/null; then
     echo 'Installed. Listening only on 127.0.0.1:3080. No firewall or public access was changed.'

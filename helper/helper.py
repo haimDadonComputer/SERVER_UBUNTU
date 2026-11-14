@@ -6,8 +6,8 @@ CONFIG = '/etc/ubuntu-control/helper.json'
 LOCK = threading.RLock()
 ENV = {'PATH': '/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_COLORS': '0'}
 
-def run(argv, timeout=20, check=True):
-    p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=ENV)
+def run(argv, timeout=20, check=True, input_text=None):
+    p = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, env=ENV, cwd='/')
     if check and p.returncode:
         raise ValueError('System command failed: ' + pathlib.Path(argv[0]).name)
     return p.stdout[:4000000]
@@ -330,16 +330,54 @@ def project(cfg, identifier):
         raise ValueError('Invalid authorized project root')
     return p
 
+def github_broker(action,args=None):
+    with socket.socket(socket.AF_UNIX) as conn:
+        conn.settimeout(120)
+        try:
+            conn.connect('/run/ubuntu-control-github/broker.sock')
+            conn.sendall((json.dumps({'action':action,'args':args or {}})+'\n').encode())
+            data=b''
+            while b'\n' not in data:
+                part=conn.recv(65536)
+                if not part or len(data)>16000000:raise ValueError('Invalid GitHub broker response')
+                data+=part
+        except OSError:raise ValueError('שירות GitHub App אינו זמין. בדקו שהשדרוג הותקן ושירות ubuntu-control-github פעיל.') from None
+    result=json.loads(data.split(b'\n')[0])
+    if not result.get('ok'):raise ValueError(result.get('error','GitHub request failed'))
+    return result['data']
+
+def import_github_project(cfg,args):
+    identifier=project_identifier(args.get('id'))
+    repo=github_broker('repository',{'repositoryId':args.get('repositoryId')})
+    existing=all_projects(cfg).get(identifier)
+    if identifier in cfg.get('projects',{}):raise ValueError('בחרו שם תיקייה חדש; פרויקט זה מוגדר בתצורה הקיימת.')
+    if existing:
+        p=project(cfg,identifier)
+        if any(pathlib.Path(p['root']).iterdir()):raise ValueError('ייבוא מחייב תיקייה ריקה. בחרו שם חדש כדי לשמור את הקבצים הקיימים.')
+    else:p=create_project(cfg,{**args,'repo':repo['clone_url'],'branch':repo['default_branch']})
+    p={**p,'repo':repo['clone_url'],'branch':repo['default_branch'],'auth':'github-app','github_repository_id':repo['id']}
+    registry=read_project_registry(cfg);registry[identifier]=p;write_project_registry(cfg,registry)
+    return p
+
 def project_run(cfg, p, args, timeout=30):
     # Run a fixed, root-owned runner as the isolated project user. It drops all web/helper privileges.
     env=['/usr/bin/env','UC_EXPECTED_REPO='+(p.get('repo') or ''),'UC_EXPECTED_BRANCH='+(p.get('branch') or 'main')]
+    credential_input=None
+    if p.get('auth')=='github-app' and args[0] in ('clone','preview','deploy','pull'):
+        lease=github_broker('repository-token',{'repositoryId':p['github_repository_id']})
+        if lease['repository']['clone_url']!=p['repo']:raise ValueError('כתובת המאגר השתנתה. יש לייבא מחדש לתיקייה חדשה.')
+        credential_input=json.dumps({'token':lease['token']})+'\n'
+        env+=['UC_GITHUB_AUTH_STDIN=1']
     if p.get('kind')=='docker':
         import pwd
         uid=pwd.getpwnam(cfg.get('project_user','ubuntu-projects')).pw_uid
         env+=['DOCKER_HOST=unix:///run/user/%d/docker.sock'%uid,'XDG_RUNTIME_DIR=/run/user/%d'%uid]
-    return run(['/usr/sbin/runuser', '-u', cfg.get('project_user','ubuntu-projects'), '--', *env, '/usr/bin/python3', '/opt/ubuntu-control/helper/project_runner.py', p['root'], *args], timeout=timeout)
+    return run(['/usr/sbin/runuser', '-u', cfg.get('project_user','ubuntu-projects'), '--', *env, '/usr/bin/python3', '/opt/ubuntu-control/helper/project_runner.py', p['root'], *args], timeout=timeout, input_text=credential_input)
 
 def dispatch(cfg, action, args):
+    if action in ('github-status','github-configure','github-check','github-repositories','github-disconnect'):
+        return github_broker(action.removeprefix('github-'),args)
+    if action=='github-import':return import_github_project(cfg,args)
     pending_file = pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'pending.json'
     if pending_file.exists() and action in ('project-deploy','project-clone','project-rollback','service'):
         raise ValueError('Confirm or roll back the pending firewall transaction first')
@@ -371,6 +409,9 @@ def dispatch(cfg, action, args):
             if r.status>=400: raise ValueError('Rollback health check failed')
         return result
     if action == 'project-preview': return json.loads(project_run(cfg, project(cfg,args['project']), ['preview'], 60))
+    if action == 'project-pull':
+        if not args.get('confirmed'):raise ValueError('Explicit pull confirmation required')
+        return json.loads(project_run(cfg,project(cfg,args['project']),['pull'],120))
     if action == 'project-clone':
         p = project(cfg,args['project'])
         return json.loads(project_run(cfg, p, ['clone', p.get('repo',''), p.get('branch','main')],120))

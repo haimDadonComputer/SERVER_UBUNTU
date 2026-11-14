@@ -46,12 +46,20 @@
             "verification": "API and Python adapter tests plus browser creation of two projects and file editing; real Ubuntu mkdir/ACL/capability checks still require server validation"
         },
         {
+            "id": "github-app",
+            "status": "implemented",
+            "progress": 100,
+            "description": "Dedicated unprivileged PEM/JWT/token broker, installation repository browser/import, read-only scoped Git credentials, renewal/revocation/rotation, code-only pulls, and staged existing-install upgrade",
+            "verification": "Mock GitHub API, credential isolation and authenticated API tests; browser private-repository import passed. Real installation/PEM/Ubuntu service integration pending. POSIX Git askpass test runs in Linux CI."
+        },
+        {
             "id": "validation",
             "status": "done",
             "progress": 100,
             "checks": {
-                "node": 8,
-                "python": 18,
+                "node": 11,
+                "python": 34,
+                "pythonSkipped": 1,
                 "browser": 1,
                 "productionBuild": "passed",
                 "dependencyAudit": "0 vulnerabilities"

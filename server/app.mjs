@@ -283,6 +283,78 @@ export async function createApp({ db, config, helper }) {
             res.json(await helper('firewall-' + action, { transaction }));
             audit(db, req.session.username, 'firewall-' + action, transaction);
         });
+    app.get('/api/github/status', async (_req, res) => res.json(await helper('github-status')));
+    app.post('/api/github/configure', async (req, res) => {
+        await reauth(req);
+        const input = z
+            .object({
+                appId: z.string().regex(/^[1-9][0-9]{0,18}$/),
+                installationId: z.string().regex(/^[1-9][0-9]{0,18}$/),
+                pemPath: z.literal('/etc/ubuntu-control/github/app.pem').optional(),
+            })
+            .parse(req.body);
+        const result = await helper('github-configure', input);
+        audit(db, req.session.username, 'github-configure', 'installation');
+        res.json(result);
+    });
+    app.post('/api/github/check', async (req, res) => {
+        const result = await helper('github-check');
+        audit(db, req.session.username, 'github-check', 'installation');
+        res.json(result);
+    });
+    app.get('/api/github/repositories', async (_req, res) =>
+        res.json(await helper('github-repositories'))
+    );
+    app.post('/api/github/refresh', async (req, res) => {
+        const result = await helper('github-repositories');
+        audit(db, req.session.username, 'github-refresh', 'repositories');
+        res.json(result);
+    });
+    app.post('/api/github/disconnect', async (req, res) => {
+        await reauth(req);
+        const result = await helper('github-disconnect');
+        audit(db, req.session.username, 'github-disconnect', 'installation');
+        res.json(result);
+    });
+    app.post('/api/github/import', async (req, res) => {
+        const input = z
+            .object({
+                id: projectInput.shape.id,
+                name: projectInput.shape.name,
+                repositoryId: z.number().int().positive().safe(),
+                confirmed: z.literal(true),
+                kind: z.enum(['node', 'docker']).default('node'),
+                service: z.string().max(100).optional(),
+                health_port: z.number().int().min(1024).max(65535).optional(),
+            })
+            .parse(req.body);
+        const job = queue.add('project:' + input.id, async (stage) => {
+            stage('מאמת הרשאות GitHub ויוצר פרויקט');
+            const p = await helper('github-import', input);
+            if (!path.isAbsolute(p.root) || !p.root.startsWith(config.projects + path.sep))
+                throw new Error('Project outside configured root');
+            db.prepare(
+                `INSERT INTO projects(id,name,root,service,kind,repo,branch,health_port,auth,github_repository_id) VALUES(?,?,?,?,?,?,?,?,?,?)
+             ON CONFLICT(id) DO UPDATE SET repo=excluded.repo,branch=excluded.branch,auth=excluded.auth,github_repository_id=excluded.github_repository_id`
+            ).run(
+                input.id,
+                input.name,
+                p.root,
+                p.service || null,
+                p.kind || 'node',
+                p.repo,
+                p.branch,
+                p.health_port || null,
+                'github-app',
+                p.github_repository_id
+            );
+            stage('מוריד מאגר באמצעות GitHub App');
+            await helper('project-clone', { project: input.id, confirmed: true });
+            db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(input.id);
+            audit(db, req.session.username, 'github-import', input.id);
+        });
+        res.status(202).json({ job });
+    });
     app.get('/api/projects', (_req, res) => res.json(db.prepare('SELECT * FROM projects').all()));
     app.get('/api/projects/authorized', async (_req, res) =>
         res.json(await helper('project-authorized'))
@@ -340,7 +412,7 @@ export async function createApp({ db, config, helper }) {
     app.post('/api/projects/:project/preview', async (req, res) =>
         res.json(await helper('project-preview', { project: req.project.id }))
     );
-    for (const action of ['clone', 'deploy'])
+    for (const action of ['clone', 'deploy', 'pull'])
         app.post('/api/projects/:project/' + action, async (req, res) => {
             if (req.body.confirmed !== true) throw new Error('נדרש אישור מפורש להרצת קוד הפרויקט');
             const expected =
@@ -352,7 +424,13 @@ export async function createApp({ db, config, helper }) {
                     : undefined;
             const p = req.project;
             const id = queue.add('project:' + p.id, async (stage) => {
-                stage(action === 'clone' ? 'מוריד מאגר' : 'בונה גרסה ובודק תקינות');
+                stage(
+                    action === 'clone'
+                        ? 'מוריד מאגר'
+                        : action === 'pull'
+                          ? 'מושך קוד ללא פריסה'
+                          : 'בונה גרסה ובודק תקינות'
+                );
                 await helper('project-' + action, { project: p.id, confirmed: true, expected });
                 db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(p.id);
                 audit(db, req.session.username, 'project-' + action, p.id);

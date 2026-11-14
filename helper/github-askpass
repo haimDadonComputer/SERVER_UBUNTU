@@ -1,0 +1,12 @@
+#!/usr/bin/python3
+"""Fixed root-owned askpass executable. No credentials in this file or arguments."""
+import os,socket,sys
+try:
+    conn=socket.socket(socket.AF_UNIX);conn.settimeout(5)
+    conn.connect(os.environ['UC_GIT_CREDENTIAL_SOCKET'])
+    conn.sendall(sys.argv[1].encode())
+    value=conn.recv(16384)
+    sys.stdout.buffer.write(value+b'\n')
+    conn.close()
+except Exception:
+    sys.exit(1)

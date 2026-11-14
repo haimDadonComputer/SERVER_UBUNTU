@@ -11,6 +11,7 @@
 - רשימת פורטים חיה, חיפוש וסינון, שיוך שירותים, פעולות שירות מאושרות ולוגים לקריאה בלבד. שירות שאינו ברשימת ההרשאות אינו ניתן להפעלה או לעצירה.
 - UFW ו־Hetzner API, תמיכה ב־IPv4/IPv6 ו־CIDR, חסימת שינוי פורטים רגישים, צילום מצב ושחזור אוטומטי אחרי 120 שניות ללא אישור. שינויי ענן מותרים רק לחומת אש ייעודית עם תווית מתאימה. נגישות חיצונית לא מוסקת מתוך כללי Firewall.
 - יצירה ופתיחה של כמה תיקיות פרויקט ישירות מהאתר תחת `/srv/ubuntu-projects`, בלי להוסיף כל פרויקט ל־helper.json. אפשר לציין מאגר GitHub ולשייך שירות קיים. Deploy Key למאגר פרטי, סקירת עדכונים לפני פריסה, גרסאות באמצעות Git worktrees, הרצת npm/test/build כמשתמש פרויקטים נפרד, בדיקת HTTP ושחזור גרסה קודמת בכשל.
+- חיבור GitHub App קיימת דרך ההגדרות, רשימת כל מאגרי ההתקנה (כולל פרטיים), חיפוש/סינון/מיון וייבוא מתוכם. שירות ubuntu-github נפרד קורא PEM קבוע; Tokens מוגבלים לקריאה ולמאגר הנבחר ונשמרים בזיכרון בלבד. תמיכת Deploy Key נשמרת. קיימת גם משיכת קוד בלבד עם fast-forward, ללא Push.
 - ניהול קובצי טקסט עד 1 MB, יצירה, העלאה, הורדה ומחיקה באישור. קבצים רגישים, symlinks, hardlinks ונתוני runtime חסומים. ב־Linux תיקיות מעוגנות באמצעות file descriptors למניעת החלפת symlinks בזמן גישה.
 - הגדרות התראות ותצוגה, גיבויי SQLite מוצפנים ב־AES-256-GCM, וקובצי דוגמה ל־systemd, Docker ו־whatsapp-web.js.
 
@@ -64,6 +65,8 @@ helper/helper.py        Unix socket, SO_PEERCRED, רשימת פעולות מוג
 helper/project_runner.py Git/בנייה כמשתמש פרויקטים ללא root
 deploy/                 יחידות systemd ודוגמאות Proxy/תצורה
 scripts/install.sh      התקנה ללא דריסת קבצים קיימים
+scripts/upgrade.sh      שדרוג התקנה קיימת עם גיבוי, staging ושחזור קוד בכשל
+helper/github_app.py    שירות GitHub App נפרד, JWT ו־Tokens בזיכרון
 tests/                  בדיקות אבטחה, API ו־helper עם mocks
 examples/whatsapp/      דוגמת Chromium ונתונים קבועים
 ```
@@ -77,7 +80,7 @@ examples/whatsapp/      דוגמת Chromium ונתונים קבועים
 - שירות systemd מזוהה גם דרך cgroups. שיוך Docker מבוסס פורטים מפורסמים, ו־PM2 לפי PID. כשאי אפשר להוכיח שיוך הוא נשאר לא מנוהל. פריסה בגרסאות דורשת systemd, כולל עבור rootless Docker.
 - שינוי כללי UFW דורש אישור מקומי `ufw_verified_host_network`. Docker רגיל עלול לעקוף UFW; אין לסמן אישור בלי בדיקת הרשת בפועל. הסרת כלל מסירה כלל שהמערכת יצרה; אינה מבטיחה חסימת פורט אם קיימים כללים אחרים.
 - גיבוי דרך הממשק כולל SQLite בלבד, מוצפן. גיבויי תצורת root, מפתחות, מידע קבוע ומסדי פרויקטים מתוארים בנפרד. אין שחזור אוטומטי של migrations במסד פרויקט.
-- פריסה שומרת את Git checkout המקורי ואת הגרסאות הקודמות ואינה משתמשת ב־`git reset --hard`. בדיקות ובנייה עלולות לבצע פעולות חיצוניות לפי קוד המאגר; יש לאשר רק קוד מהימן. הפרדת המשתמשים מונעת הרשאות root, אך אינה מבודדת לחלוטין פרויקטים זה מזה: הגרסה הנוכחית משתמשת במשתמש פרויקטים משותף. לפרויקטים שאינם מהימנים זה לזה יש להפריד משתמשים/שרתים.
+- פריסה שומרת את הגרסאות הקודמות ואינה משתמשת ב־`git reset --hard`. ״משיכת קוד בלבד״ מעדכנת את checkout המקור בלבד ושומרת ענף גיבוי מקומי; אינה מעדכנת את `current` של השירות. בדיקות ובנייה עלולות לבצע פעולות חיצוניות לפי קוד המאגר; יש לאשר רק קוד מהימן. הפרדת המשתמשים מונעת הרשאות root, אך אינה מבודדת לחלוטין פרויקטים זה מזה: הגרסה הנוכחית משתמשת במשתמש פרויקטים משותף. לפרויקטים שאינם מהימנים זה לזה יש להפריד משתמשים/שרתים. משתמשי פרויקטים משותפים יכולים לצפות בתהליכים ובמשאבים של אותו UID; Token מוגבל למאגר מפחית היקף חשיפה אך אינו מהווה בידוד בין אותם משתמשים.
 - בפריסה ראשונה אין גרסה קודמת לשחזור. יש לבצע פריסה ראשונית לפני הפעלת יחידת השירות. בעת אתחול המערכת, משימות שנקטעו מסומנות `interrupted` ואינן מורצות מחדש אוטומטית.
 - אין מימוש סריקה חיצונית שמוכיח נגישות דרך Proxy, רשת Hetzner ו־IPv6. לכן חשיפה שאינה מקומית מוצגת ״לא ידוע״; תצוגת כללי השכבות זמינה בנפרד.
 - whatsapp-web.js הוא כלי לא רשמי. אין הבטחה לחיבור רציף או לעמידה בתנאי WhatsApp.
@@ -88,3 +91,5 @@ examples/whatsapp/      דוגמת Chromium ונתונים קבועים
 - [Node.js SQLite API](https://nodejs.org/download/release/latest-v24.x/docs/api/sqlite.html)
 - [Hetzner Cloud API](https://docs.hetzner.cloud/reference/cloud)
 - [Hetzner Firewall behavior](https://docs.hetzner.com/cloud/firewalls/overview/)
+- [GitHub App JWT](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
+- [GitHub installation access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)

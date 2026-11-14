@@ -1,4 +1,4 @@
-import copy,json,pathlib,queue,sys,tempfile,unittest,os
+import copy,json,pathlib,queue,sys,tempfile,unittest,os,shutil,subprocess
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'helper'))
 from project_lifecycle import Lifecycle,validate_runtime,project_lock,dispatch_lifecycle,recover_transactions,rehydrate
@@ -53,6 +53,44 @@ class LifecycleTests(unittest.TestCase):
         unit=self.life.unit_text('demo',p)
         for required in ('DynamicUser=true','LoadCredential=environment:','ProtectSystem=strict','StateDirectory=','ReadOnlyPaths=','SupplementaryGroups=ubuntu-projects'):self.assertIn(required,unit)
         self.assertNotIn('Environment=',unit);self.assertNotIn('private-random-value',unit);self.assertNotIn('User=root',unit)
+        self.assertIn('WorkingDirectory='+str(self.root/'current')+'\n',unit)
+        self.assertNotIn('WorkingDirectory="',unit)
+    def test_unit_scalar_paths_preserve_spaces_and_escape_specifiers(self):
+        p=self.managed();p['root']='/srv/project 100% code'
+        text=self.life.unit_text('demo',p)
+        self.assertIn('WorkingDirectory='+str(pathlib.Path(p['root'])/'current').replace('%','%%')+'\n',text)
+        self.assertIn('ReadOnlyPaths="/srv/project 100%% code"',text)
+    @unittest.skipUnless(sys.platform=='linux' and shutil.which('systemd-analyze'),'Real systemd parser requires Linux')
+    def test_generated_unit_passes_actual_systemd_parser(self):
+        p=self.managed();directory=self.base/'verify';directory.mkdir()
+        unit=directory/self.life.names('demo')['unit']
+        unit.write_text(self.life.unit_text('demo',p).replace('ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','ExecStart=/usr/bin/true'))
+        (directory/'ubuntu-control-helper.service').write_text('[Service]\nExecStart=/usr/bin/true\n')
+        env={**os.environ,'SYSTEMD_UNIT_PATH':str(directory)+':/usr/lib/systemd/system:/lib/systemd/system','SYSTEMD_LOG_COLOR':'0'}
+        result=subprocess.run(['systemd-analyze','verify',str(unit)],capture_output=True,text=True,env=env,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+    def test_invalid_first_unit_is_confirmed_inactive_without_hiding_original_failure(self):
+        self.managed()
+        def release(id,p,expected):p.update(preparedCommit='a'*40,release='1-aaaaaaaaaa');return {'release':p['release'],'commit':p['preparedCommit']}
+        self.runner.return_value=json.dumps({'restored':False})
+        def run(argv,**kwargs):
+            if 'stop' in argv:raise OperationError('bad unit',{'stderr':'unit has bad setting'})
+            return 'LoadState=bad-setting\nActiveState=inactive\n'
+        self.run.side_effect=run
+        with patch.object(self.life,'release',side_effect=release),patch.object(self.life,'provision',side_effect=OperationError('original failure',{'stderr':'WorkingDirectory path is not absolute'})):
+            with self.assertRaises(OperationError) as error:self.life.deploy('demo',{})
+        self.assertIn('WorkingDirectory',error.exception.details['stderr']);self.assertFalse(self.life.transaction_path('demo').exists())
+    def test_failed_stop_of_an_active_first_unit_keeps_recovery_pending(self):
+        self.managed()
+        def release(id,p,expected):p.update(preparedCommit='a'*40,release='1-aaaaaaaaaa');return {'release':p['release'],'commit':p['preparedCommit']}
+        self.runner.return_value=json.dumps({'restored':False})
+        def run(argv,**kwargs):
+            if 'stop' in argv:raise ValueError('stop failed')
+            return 'LoadState=loaded\nActiveState=active\n'
+        self.run.side_effect=run
+        with patch.object(self.life,'release',side_effect=release),patch.object(self.life,'provision',side_effect=ValueError('original failure')):
+            with self.assertRaises(OperationError):self.life.deploy('demo',{})
+        self.assertTrue(self.life.transaction_path('demo').exists())
     def test_read_only_records_hide_credentials_and_internal_archive_paths(self):
         self.managed();self.registry['demo'].update(archive={'code':'SECRET-PATH'},publicBuild=['PUBLIC_URL'])
         self.assertNotIn('SECRET-PATH',json.dumps(dispatch_lifecycle(self.cfg,'project-records',{},self.backend)))

@@ -4,7 +4,7 @@
 Run after upgrade: sudo python3 scripts/acceptance-runtime.py [--docker]
 No existing web users, database, settings, firewall or projects are modified.
 """
-import argparse,json,os,pathlib,shutil,socket,sys,tempfile,urllib.request,uuid
+import argparse,json,os,pathlib,re,shutil,socket,sys,tempfile,urllib.request,uuid
 
 REQUIRED_HELPER_FILES=('helper.py','project_lifecycle.py','project_logs.py','project_secrets.py','runtime_launcher.py','project_runner.py')
 
@@ -14,8 +14,41 @@ def installed_helper_directory(directory=pathlib.Path('/opt/ubuntu-control/helpe
         raise SystemExit('Runtime acceptance cannot start: installed helper files are missing: '+', '.join(missing)+'. The lifecycle upgrade has not completed. Run scripts/upgrade.sh from the source checkout and wait for "Upgrade complete" before retrying. No test resources were created; checkout modules will not be used as a fallback.')
     return directory
 
+def report_failure(error,stage,state,identifier,secrets=()):
+    from diagnostics import clean,redact
+    from project_secrets import atomic_private
+    report={'project':identifier,'stage':stage,'error':redact(str(error),secrets)[:1200],'details':clean(getattr(error,'details',{}),secrets)}
+    print(json.dumps(report,ensure_ascii=False,indent=2),file=sys.stderr)
+    try:atomic_private(state/('acceptance-'+stage+'-failure.json'),json.dumps(report,ensure_ascii=False,indent=2))
+    except OSError:print('Could not persist the diagnostic report; use the redacted output above.',file=sys.stderr)
+
+def cleanup_test(life,identifier):
+    if life.transaction_path(identifier).exists():raise RuntimeError('Recovery is pending; test resources were preserved. Use --cleanup-state with this acceptance directory after inspecting the original failure.')
+    p=life.lookup(identifier,True)
+    if p.get('lifecycle','active')=='active':life.archive(identifier,{'confirmName':identifier})
+    life.purge(identifier,{'confirmName':identifier})
+
+def cleanup_state(name,backend,Lifecycle):
+    # Only a single test project from a root-private acceptance registry is in
+    # scope. No client-controlled project paths or main registry are accepted.
+    if not re.fullmatch(r'acceptance-[A-Za-z0-9_-]+',name):raise ValueError('Expected an acceptance directory basename')
+    state=pathlib.Path('/var/lib/ubuntu-control-helper')/name
+    if state.is_symlink() or not state.is_dir() or state.stat().st_uid!=0 or state.stat().st_mode&0o077:raise ValueError('Acceptance directory must be root-owned and private')
+    cfg={'project_root':'/srv/ubuntu-projects','state_dir':str(state),'env_dir':str(state/'env'),'projects':{},'services':[]}
+    records=backend.read_project_registry(cfg)
+    if len(records)!=1:raise ValueError('Acceptance cleanup requires exactly one test record')
+    identifier,p=next(iter(records.items()))
+    if not re.fullmatch(r'uc-accept-[a-f0-9]{10}',identifier) or p.get('root')!='/srv/ubuntu-projects/'+identifier:raise ValueError('Acceptance project scope does not match')
+    life=Lifecycle(cfg,vars(backend))
+    from project_lifecycle import recover_transactions
+    recover_transactions(cfg,vars(backend))
+    if backend.read_project_registry(cfg)[identifier].get('lifecycle')!='deleted':cleanup_test(life,identifier)
+    if life.transaction_path(identifier).exists():raise RuntimeError('Recovery is still pending; no state directory was removed')
+    shutil.rmtree(state)
+    print('CLEANED: '+identifier)
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--docker',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--docker',action='store_true');parser.add_argument('--cleanup-state');args=parser.parse_args()
     if os.geteuid()!=0:sys.exit('Run with sudo on the upgraded Ubuntu server')
     if 'Ubuntu' not in pathlib.Path('/etc/os-release').read_text():sys.exit('Ubuntu is required')
     sys.path.insert(0,str(installed_helper_directory()))
@@ -25,10 +58,12 @@ def main():
     from project_logs import ProjectLogHub
     from diagnostics import OperationError
     from project_secrets import read_values
+    if args.cleanup_state:
+        cleanup_state(args.cleanup_state,backend,Lifecycle);return
     identifier='uc-accept-'+uuid.uuid4().hex[:10]
     state=pathlib.Path(tempfile.mkdtemp(prefix='acceptance-',dir='/var/lib/ubuntu-control-helper'))
     cfg={'project_root':'/srv/ubuntu-projects','state_dir':str(state),'env_dir':str(state/'env'),'projects':{},'services':[]}
-    life=Lifecycle(cfg,vars(backend));created=False
+    life=Lifecycle(cfg,vars(backend));created=False;failure=None;cleanup_error=None;secret=None;stage='prepare'
     with socket.socket() as probe:probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
     account=pwd.getpwnam('ubuntu-projects')
     source='''import http from 'node:http';import fs from 'node:fs';
@@ -50,32 +85,37 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
             runtime.update(internalPort=3000,dataPath='/app/shared')
             write('Dockerfile','FROM node:24-alpine\nWORKDIR /app\nCOPY index.mjs .\nENV PORT=3000 DATA_PATH=/app/shared/counter\nCMD ["node", "index.mjs"]\n')
         life.configure(identifier,{'runtime':runtime});life.environment(identifier,{'set':{'API_KEY':secret}})
-        life.control(identifier,'start');assert get()['version']=='one';get('/touch');get('/secret')
+        stage='initial-start';life.control(identifier,'start');assert get()['version']=='one';get('/touch');get('/secret')
+        stage='restart'
         life.control(identifier,'restart');assert get()['data']=='retained'
-        version('two');life.deploy(identifier,{});assert get()['version']=='two';assert get()['data']=='retained'
+        stage='update';version('two');life.deploy(identifier,{});assert get()['version']=='two';assert get()['data']=='retained'
+        stage='rollback'
         write('index.mjs','process.exit(1)')
         try:life.deploy(identifier,{})
         except OperationError:pass
         else:raise AssertionError('Broken runtime was reported healthy')
         assert get()['version']=='two';assert get()['data']=='retained'
-        records=ProjectLogHub(cfg,vars(backend)).history(identifier);assert secret not in json.dumps(records)
+        stage='journal';records=ProjectLogHub(cfg,vars(backend)).history(identifier);assert secret not in json.dumps(records)
+        stage='stopped-update'
         life.control(identifier,'stop');version('three');life.deploy(identifier,{})
         assert life.state(life.lookup(identifier))['active']!='active'
-        life.archive(identifier,{'confirmName':identifier});life.restore(identifier)
+        stage='archive-restore';life.archive(identifier,{'confirmName':identifier});life.restore(identifier)
         assert life.lookup(identifier)['updates']=='manual';assert life.lookup(identifier)['desired']=='stopped'
         assert read_values(life.env_path(identifier))['API_KEY']==secret
-        life.control(identifier,'start');assert get()['version']=='three';assert get()['data']=='retained'
-        print('PASS: '+('rootless Docker' if args.docker else 'DynamicUser Node')+' start/restart/local snapshot/health failure/rollback/env/data/archive/restore/redacted journal')
+        stage='restored-start';life.control(identifier,'start');assert get()['version']=='three';assert get()['data']=='retained'
+    except Exception as error:
+        failure=error;report_failure(error,stage,state,identifier,(secret,))
     finally:
         if created:
             try:
-                p=life.lookup(identifier,True)
-                if p.get('lifecycle','active')=='active':life.archive(identifier,{'confirmName':identifier})
-                life.purge(identifier,{'confirmName':identifier})
-            except Exception:
+                cleanup_test(life,identifier)
+            except Exception as error:
+                cleanup_error=error;report_failure(error,'cleanup',state,identifier,(secret,))
                 print('Test cleanup incomplete. Inspect only '+identifier+'; registry: '+str(state),file=sys.stderr)
-                raise
         # This root-created private temporary registry is the only recursive cleanup.
-        shutil.rmtree(state)
+        if failure is None and cleanup_error is None:shutil.rmtree(state)
+    if failure is not None or cleanup_error is not None:
+        print('FAIL: diagnostics retained in '+str(state),file=sys.stderr);raise SystemExit(1)
+    print('PASS: '+('rootless Docker' if args.docker else 'DynamicUser Node')+' start/restart/local snapshot/health failure/rollback/env/data/archive/restore/redacted journal')
 
 if __name__=='__main__':main()

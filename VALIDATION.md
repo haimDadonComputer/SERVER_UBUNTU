@@ -72,3 +72,11 @@ The first server upgrade reported two Python failures: static-project and invali
 All project fixtures now use temporary state directories, and a cross-platform filesystem guard fails tests that probe the live helper state. A regression test verifies pending recovery still blocks project creation in isolated state. Acceptance preflight checks all required installed modules before imports or resource creation and explains that upgrade.sh must finish successfully; it never falls back to checkout helper code. Two preflight tests cover old and complete installations without executing their modules.
 
 Rechecked locally: 22 Node tests passed; Python ran 72 tests, 67 passed and 5 POSIX-only tests skipped; production build passed. The server retry and real Ubuntu runtime acceptance remain pending.
+
+## Generated WorkingDirectory fix and acceptance diagnostics
+
+The server journal identified the first real runtime failure: JSON quotes around WorkingDirectory were treated literally by systemd 255, so the path was rejected as non-absolute. The generator now emits an unquoted scalar path, keeps quoting for list directives, and escapes percent specifiers. Regression checks assert the scalar form, whitespace/specifier behavior, and use systemd-analyze verify on Linux without starting services. This Linux parser check is skipped on Windows.
+
+Acceptance now prints and privately stores redacted structured primary and cleanup errors separately, preserves resources when recovery is pending, and reports PASS only after cleanup succeeds. A narrowly scoped --cleanup-state option recovers and removes a single verified root-private acceptance fixture; it never accepts normal project IDs or arbitrary paths. First-deployment rollback confirms a bad-setting/not-found unit is inactive before treating a failed stop as harmless; ambiguous or active states retain the recovery journal.
+
+Local checks after this fix: 22 Node tests and the production build passed; Python ran 79 tests, 73 passed and 6 Linux/POSIX checks skipped. The systemd parser regression is included in the Ubuntu CI test run, but was not executed on this Windows host. The corrected unit still needs runtime acceptance on Contabo; the provided server journal establishes the old quoting failure, not a successful deployment of this fix.

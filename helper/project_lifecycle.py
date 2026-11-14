@@ -180,8 +180,14 @@ class Lifecycle:
         return self.h['run'](['/usr/sbin/runuser','-u','ubuntu-docker','--',*argv],timeout=timeout)
     def unit_text(self,identifier,p):
         n=self.names(identifier);r=p['runtime'];env=self.env_path(identifier);launch=env.with_suffix('.runtime.json')
-        q=lambda text:json.dumps(str(text),ensure_ascii=False)
-        lines=['[Unit]','Description=Ubuntu Control project '+identifier,'After=network-online.target ubuntu-control-helper.service','Wants=ubuntu-control-helper.service','[Service]','Type=simple','WorkingDirectory='+q(pathlib.Path(p['root'])/'current'),'ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','LoadCredential=launch:'+str(launch),'LoadCredential=environment:'+str(env),'Restart=on-failure','RestartSec=5','KillMode=control-group','UMask=0077','NoNewPrivileges=true','ProtectSystem=strict','ProtectHome=true','PrivateTmp=true','ProtectKernelTunables=true','ProtectKernelModules=true','ProtectControlGroups=true','RestrictSUIDSGID=true','LimitCORE=0','ReadOnlyPaths='+q(p['root']),'InaccessiblePaths=-/etc/ubuntu-control -/var/lib/ubuntu-control -/var/lib/ubuntu-control-helper -/var/lib/ubuntu-control-github']
+        # WorkingDirectory is a scalar path, not a shell/JSON word. PID1 does
+        # not remove surrounding quotes here. List directives do unquote words.
+        def scalar(text):
+            value=str(text)
+            if any(ord(c)<32 for c in value) or value!=value.strip():raise ValueError('Unsupported control/edge whitespace in systemd path')
+            return value.replace('%','%%')
+        q=lambda text:json.dumps(scalar(text),ensure_ascii=False)
+        lines=['[Unit]','Description=Ubuntu Control project '+identifier,'After=network-online.target ubuntu-control-helper.service','Wants=ubuntu-control-helper.service','[Service]','Type=simple','WorkingDirectory='+scalar(pathlib.Path(p['root'])/'current'),'ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','LoadCredential=launch:'+scalar(launch),'LoadCredential=environment:'+scalar(env),'Restart=on-failure','RestartSec=5','KillMode=control-group','UMask=0077','NoNewPrivileges=true','ProtectSystem=strict','ProtectHome=true','PrivateTmp=true','ProtectKernelTunables=true','ProtectKernelModules=true','ProtectControlGroups=true','RestrictSUIDSGID=true','LimitCORE=0','ReadOnlyPaths='+q(p['root']),'InaccessiblePaths=-/etc/ubuntu-control -/var/lib/ubuntu-control -/var/lib/ubuntu-control-helper -/var/lib/ubuntu-control-github']
         if r['kind']=='node':lines+=['DynamicUser=true','User=ucp-'+n['key'],'SupplementaryGroups=ubuntu-projects','StateDirectory='+n['state'],'StateDirectoryMode=0700','BindPaths='+q('/var/lib/'+n['state']+':'+p['root']+'/shared'),'ReadWritePaths='+q(p['root']+'/shared'),'InaccessiblePaths=-/var/lib/ubuntu-projects -/var/lib/ubuntu-docker']
         else:
             import pwd
@@ -303,7 +309,15 @@ class Lifecycle:
                     self.provision(identifier,old)
                     if was_running:
                         self.h['run'](['/usr/bin/systemctl','restart',self.names(identifier)['unit']]);self.health(identifier,old)
-                elif result:self.h['run'](['/usr/bin/systemctl','stop',self.names(identifier)['unit']])
+                elif result:
+                    # Provisioning can fail before the first unit becomes valid.
+                    # A failed stop is not proof of inactivity: query LoadState
+                    # and ActiveState, retaining the transaction if uncertain.
+                    try:self.h['run'](['/usr/bin/systemctl','stop',self.names(identifier)['unit']])
+                    except Exception:
+                        state=self.h['run'](['/usr/bin/systemctl','show',self.names(identifier)['unit'],'-p','LoadState','-p','ActiveState'],check=False)
+                        props=dict(line.split('=',1) for line in state.splitlines() if '=' in line)
+                        if props.get('LoadState') not in ('not-found','bad-setting') or props.get('ActiveState') not in ('inactive','failed'):raise
             except Exception as recovery:
                 recovery_error=str(recovery);restored=False
                 try:self.h['run'](['/usr/bin/systemctl','stop',self.names(identifier)['unit']])

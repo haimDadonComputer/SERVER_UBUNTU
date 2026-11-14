@@ -49,6 +49,16 @@ test('GitHub routes require authentication, CSRF and reauthentication; imports u
                 };
             }
             if (action === 'project-clone') return {};
+            if (action === 'github-check')
+                throw Object.assign(new Error('GitHub permission denied'), {
+                    details: {
+                        code: 'GITHUB_HTTP_403',
+                        httpStatus: 403,
+                        stage: 'github-api',
+                        stderr: 'token=ghs_SHOULD_NOT_LEAK',
+                        token: 'SHOULD_NOT_BE_RETURNED',
+                    },
+                });
             return [];
         },
     });
@@ -115,6 +125,12 @@ test('GitHub routes require authentication, CSRF and reauthentication; imports u
         (await request('/github/check', 'POST', {}, { 'X-CSRF-Token': 'wrong' })).status,
         403
     );
+    response = await request('/github/check', 'POST', {});
+    assert.equal(response.status, 400);
+    const diagnostic = await response.json();
+    assert.equal(diagnostic.details.httpStatus, 403);
+    assert.ok(diagnostic.details.requestId);
+    assert.ok(!JSON.stringify(diagnostic).includes('SHOULD_NOT'));
     response = await request('/github/status');
     assert.ok(!(await response.text()).includes('PRIVATE KEY'));
     const input = {

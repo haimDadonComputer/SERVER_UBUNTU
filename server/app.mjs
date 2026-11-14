@@ -13,6 +13,7 @@ import * as OTPAuth from 'otpauth';
 import { Queue } from './queue.mjs';
 import { listFiles, readFile, writeFile, createDirectory, deleteEntry } from './files.mjs';
 import { metrics } from './metrics.mjs';
+import { sanitizeDetails, storedDetails } from './diagnostics.mjs';
 
 const credentials = z.object({
     username: z.string().min(3).max(64),
@@ -479,7 +480,15 @@ export async function createApp({ db, config, helper }) {
         res.json({ ok: true });
     });
     app.get('/api/jobs', (_req, res) =>
-        res.json(db.prepare('SELECT * FROM jobs ORDER BY created DESC LIMIT 50').all())
+        res.json(
+            db
+                .prepare('SELECT * FROM jobs ORDER BY created DESC LIMIT 50')
+                .all()
+                .map(({ error_details, ...row }) => ({
+                    ...row,
+                    details: storedDetails(error_details),
+                }))
+        )
     );
     app.get('/api/audit', (_req, res) =>
         res.json(db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 200').all())
@@ -545,12 +554,25 @@ export async function createApp({ db, config, helper }) {
     app.get('/{*splat}', (_req, res) => res.sendFile(path.resolve('dist/index.html')));
     app.use((err, req, res, _next) => {
         const status = err instanceof z.ZodError ? 400 : err.status || 400;
-        audit(db, req.session?.username, 'request-error', req.path, 'failed');
+        const requestId = randomUUID();
+        audit(db, req.session?.username, 'request-error', req.path, 'failed ' + requestId);
+        const details = sanitizeDetails(err.details) || {
+            code: err instanceof z.ZodError ? 'VALIDATION_ERROR' : err.code || 'REQUEST_FAILED',
+            stage: 'api',
+            hint: 'בדקו את הודעת השגיאה. ניתן לצרף את מזהה הבקשה ואת הדוח לבירור.',
+        };
+        details.requestId = requestId;
+        if (err instanceof z.ZodError)
+            details.stderr = err.issues
+                .slice(0, 24)
+                .map((issue) => issue.path.join('.') + ': ' + issue.message)
+                .join('\n');
         res.status(status).json({
             error:
                 err instanceof z.ZodError
                     ? 'נתונים לא תקינים. בדקו את השדות.'
                     : redact(err.message || 'הפעולה נכשלה'),
+            details,
         });
     });
     return { app, queue };

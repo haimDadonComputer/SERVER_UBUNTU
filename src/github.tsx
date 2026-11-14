@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { GitBranch, RefreshCw, Loader2, Search } from 'lucide-react';
+import { ErrorDetails } from './diagnostics';
 type Data = Record<string, any>;
 type Api = (path: string, method?: string, body?: unknown) => Promise<any>;
 export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api: Api }) {
@@ -10,6 +11,7 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
         [code, setCode] = useState(''),
         [busy, setBusy] = useState(false),
         [error, setError] = useState(''),
+        [details, setDetails] = useState<Data | null>(null),
         [notice, setNotice] = useState('');
     function update(s: Data) {
         setState(s);
@@ -54,6 +56,7 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
             setCode('');
         } catch (e) {
             setError((e as Error).message);
+            setDetails((e as Data).details || null);
             api('/github/status')
                 .then((s) => setState(s))
                 .catch(() => {});
@@ -176,7 +179,10 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
                 </p>
                 {error && (
                     <div className="alert error" role="alert">
-                        {error}
+                        <div className="grow">
+                            {error}
+                            <ErrorDetails details={details} />
+                        </div>
                     </div>
                 )}
                 {state.error && !error && <div className="alert warning">{state.error}</div>}
@@ -212,6 +218,7 @@ export function GitHubImport({
         [port, setPort] = useState(''),
         [busy, setBusy] = useState(false),
         [error, setError] = useState(''),
+        [details, setDetails] = useState<Data | null>(null),
         [loading, setLoading] = useState(true),
         [confirmed, setConfirmed] = useState(false);
     async function refresh() {
@@ -221,6 +228,7 @@ export function GitHubImport({
             setRepos(await api('/github/refresh', 'POST', {}));
         } catch (e) {
             setError((e as Error).message);
+            setDetails((e as Data).details || null);
         } finally {
             setLoading(false);
         }
@@ -351,6 +359,7 @@ export function GitHubImport({
                             onDone();
                         } catch (e) {
                             setError((e as Error).message);
+                            setDetails((e as Data).details || null);
                         } finally {
                             setBusy(false);
                         }
@@ -435,7 +444,10 @@ export function GitHubImport({
             )}
             {error && (
                 <div role="alert" className="alert error">
-                    {error}
+                    <div className="grow">
+                        {error}
+                        <ErrorDetails details={details} />
+                    </div>
                 </div>
             )}
         </div>

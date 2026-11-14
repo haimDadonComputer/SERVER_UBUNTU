@@ -2,6 +2,7 @@
 
 - Read README.md, INSTALL.md and TASKS.json before changes.
 - Never invent OS data or report unavailable probes as healthy.
+- Preserve structured operation diagnostics across runner/helper/API/job storage. Never collapse an inner Git failure into only a runuser exit. Redact known credentials and secret patterns before bounding/persisting output; whitelist diagnostic fields, omit stdin/environment dumps, and keep reports authenticated. Diagnostics must not expand system permissions or execute suggested commands.
 - Never run arbitrary shell strings or accept executable paths from HTTP.
 - The web process is unprivileged. Root operations belong in helper/helper.py with a root-owned allowlist.
 - Require authenticated sessions, same-origin checks and CSRF for every mutation. WebSockets must authenticate and revalidate sessions.

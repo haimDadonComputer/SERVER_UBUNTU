@@ -23,6 +23,13 @@ export function openDatabase(dir) {
         db.exec("ALTER TABLE projects ADD COLUMN auth TEXT NOT NULL DEFAULT 'deploy-key'");
     if (!columns.has('github_repository_id'))
         db.exec('ALTER TABLE projects ADD COLUMN github_repository_id INTEGER');
+    const jobColumns = new Set(
+        db
+            .prepare('PRAGMA table_info(jobs)')
+            .all()
+            .map((c) => c.name)
+    );
+    if (!jobColumns.has('error_details')) db.exec('ALTER TABLE jobs ADD COLUMN error_details TEXT');
     db.exec(
         "UPDATE jobs SET status='interrupted',error='Application restarted; inspect project state before retrying' WHERE status IN ('queued','running')"
     );

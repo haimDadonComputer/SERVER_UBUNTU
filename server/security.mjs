@@ -41,7 +41,7 @@ export function redact(text) {
         .replace(/(?:otpauth:\/\/|-----BEGIN [^-]*PRIVATE KEY-----)[\s\S]*/gi, '[REDACTED]')
         .replace(/(bearer\s+)[\w.\-]+/gi, '$1[REDACTED]')
         .replace(
-            /((?:password|passwd|secret|token|api[_-]?key|authorization|cookie|qr|session)["']?\s*[:=]\s*)[^\s,;]+/gi,
+            /(?<![\w-])((?:["']?[\w-]{0,80}(?:password|passwd|secret|token|api[_-]?key|authorization|cookie|credential|qr|session)[\w-]{0,80}["']?)\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/gi,
             '$1[REDACTED]'
         )
         .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1[REDACTED]@')

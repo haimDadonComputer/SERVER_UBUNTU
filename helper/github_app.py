@@ -23,10 +23,11 @@ API_VERSION = '2026-03-10'
 ERRORS = {401:'GitHub דחה את האימות. בדקו App ID, מפתח ושעון שרת.',403:'אין הרשאה מתאימה או שהוגבלה מכסת GitHub. בדקו הרשאות ההתקנה.',404:'התקנה או מאגר לא נמצאו או שהגישה אליהם בוטלה.',422:'הגדרות או הרשאות GitHub App אינן תקינות. בדקו Contents: Read ואישור הרשאות ההתקנה.',429:'GitHub הגביל את קצב הבקשות. נסו שוב מאוחר יותר.'}
 
 class GitHubError(ValueError):
-    def __init__(self, status, retry_after=None):
+    def __init__(self, status, retry_after=None,request_id=None):
         self.status=status
         self.retry_after=retry_after
         super().__init__(ERRORS.get(status,'שירות GitHub אינו זמין כעת. נסו שוב מאוחר יותר.'))
+        self.details={'code':'GITHUB_HTTP_'+str(status),'stage':'github-api','httpStatus':status,'retryAfter':retry_after,'requestId':request_id,'hint':str(self),'time':dt.datetime.now(dt.timezone.utc).isoformat()}
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self,*args,**kwargs): return None
@@ -43,8 +44,12 @@ def http_request(method, route, bearer, body=None):
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         retry=e.headers.get('Retry-After')
+        request_id=e.headers.get('X-GitHub-Request-Id')
+        if request_id and not re.fullmatch(r'[A-Za-z0-9:-]{1,100}',request_id):request_id=None
         e.close()
-        raise GitHubError(e.code,int(retry) if retry and retry.isdigit() else None) from None
+        error=GitHubError(e.code,int(retry) if retry and retry.isdigit() else None,request_id)
+        error.details['command']=[method,'https://api.github.com'+route]
+        raise error from None
     except (OSError,ValueError):
         raise GitHubError(503) from None
 
@@ -198,7 +203,7 @@ def serve():
                 conn.sendall((json.dumps({'ok':True,'data':result})+'\n').encode())
             except Exception as e:
                 controlled=str(e) if isinstance(e,ValueError) else 'שירות GitHub אינו זמין. בדקו את שירות ה־broker.'
-                try:conn.sendall((json.dumps({'ok':False,'error':controlled,'status':getattr(e,'status',400),'retryAfter':getattr(e,'retry_after',None)})+'\n').encode())
+                try:conn.sendall((json.dumps({'ok':False,'error':controlled,'status':getattr(e,'status',400),'retryAfter':getattr(e,'retry_after',None),'details':getattr(e,'details',None)})+'\n').encode())
                 except OSError:pass
 
 if __name__=='__main__':serve()

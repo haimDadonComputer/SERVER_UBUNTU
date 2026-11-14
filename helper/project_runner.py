@@ -2,13 +2,19 @@
 """Unprivileged, fixed Git/release workflow; invoked only by the helper."""
 import os, sys, json, subprocess, pathlib, re, time
 from git_credentials import credentials
+from diagnostics import failure,exception_details,serialize,OperationError
 
 GITHUB_TOKEN=None
 
 def command(root, argv, timeout=240):
     env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='https:ssh', GIT_SSH_COMMAND='/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes', npm_config_audit='false')
-    p = subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=timeout)
-    if p.returncode: raise ValueError('Project command failed: '+argv[0]+' (output withheld because it may contain secrets)')
+    name=pathlib.Path(argv[0]).name
+    if name=='git':stage='git-'+next((x for x in argv[1:] if x in ('clone','fetch','remote','status','rev-parse','for-each-ref','log','branch','merge','worktree')),'command')
+    elif name=='env' and len(argv)>2 and argv[1]=='npm':stage='npm-'+(argv[3] if argv[2]=='run' and len(argv)>3 else argv[2])
+    else:stage=' '.join(argv[:3])
+    try:p = subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=timeout)
+    except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,stage,root,(GITHUB_TOKEN,)) from None
+    if p.returncode: raise failure(argv,root,stage,returncode=p.returncode,stdout=p.stdout,stderr=p.stderr,secrets=(GITHUB_TOKEN,))
     return p.stdout.strip()
 
 def git(root, *args): return command(root,['/usr/bin/git','-c','core.hooksPath=/dev/null',*args])
@@ -22,8 +28,10 @@ def network_command(root,argv):
         # Reset configured credential helpers/headers and disable redirects. Askpass
         # checks the exact host + repository path, including URL rewrite attempts.
         argv=[argv[0],'-c','core.hooksPath=/dev/null','-c','credential.helper=','-c','credential.username=x-access-token','-c','credential.useHttpPath=true','-c','http.followRedirects=false','-c','http.extraHeader=',*argv[1:]]
-        p=subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=240)
-        if p.returncode:raise ValueError('GitHub clone/fetch failed; verify installation permissions, repository branch and empty destination (command output withheld)')
+        stage='git-clone' if 'clone' in argv else 'git-fetch'
+        try:p=subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=240)
+        except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,stage,root,(GITHUB_TOKEN,)) from None
+        if p.returncode:raise failure(argv,root,stage,returncode=p.returncode,stdout=p.stdout,stderr=p.stderr,secrets=(GITHUB_TOKEN,))
         return p.stdout.strip()
 
 def fetch(root,*args):return network_command(root,['/usr/bin/git','fetch',*args])
@@ -141,4 +149,4 @@ if __name__=='__main__':
             ctypes.CDLL(None).prctl(4,0,0,0,0)  # PR_SET_DUMPABLE=0 on Linux.
         print(json.dumps(execute(pathlib.Path(sys.argv[1]).resolve(),sys.argv[2],sys.argv[3:])))
     except Exception as e:
-        print(str(e),file=sys.stderr); sys.exit(1)
+        print(serialize(e,sys.argv[2] if len(sys.argv)>2 else 'project-runner',sys.argv[1] if len(sys.argv)>1 else '/', (GITHUB_TOKEN,)),file=sys.stderr); sys.exit(1)

@@ -86,6 +86,19 @@ test.beforeAll(async () => {
                 );
                 return {};
             }
+            if (action === 'project-pull')
+                throw Object.assign(new Error('אימות Git מול המאגר נכשל.'), {
+                    details: {
+                        code: 'GIT_AUTH_FAILED',
+                        stage: 'git-fetch',
+                        user: 'ubuntu-projects',
+                        cwd: '/srv/ubuntu-projects/private-app',
+                        exitCode: 128,
+                        command: ['git', 'fetch', 'origin'],
+                        stderr: 'fatal: Authentication failed token=ghs_DO_NOT_DISPLAY',
+                        hint: 'בדקו הרשאות GitHub App.',
+                    },
+                });
             if (action === 'project-create') {
                 const root = path.join(dir, args.id);
                 await fs.mkdir(root);
@@ -181,6 +194,33 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
             fs.readFile(path.join(dir, 'private-app', 'README.txt'), 'utf8').catch(() => '')
         )
         .toContain('Mock GitHub import');
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
+    const imported = page
+        .locator('.project-card')
+        .filter({ has: page.getByRole('heading', { name: 'private-app', exact: true }) });
+    await expect(imported).toBeVisible();
+    await imported.getByRole('button', { name: 'משיכת קוד בלבד', exact: true }).click();
+    await page.getByRole('button', { name: 'אישור מפורש', exact: true }).click();
+    await page.getByRole('button', { name: 'משימות רקע', exact: true }).click();
+    await expect(page.getByText('אימות Git מול המאגר נכשל.', { exact: true })).toBeVisible();
+    await page.getByText('פרטי השגיאה והמלצה לטיפול', { exact: true }).click();
+    await expect(page.getByText('GIT_AUTH_FAILED', { exact: true })).toBeVisible();
+    await expect(page.getByText('git-fetch', { exact: true })).toBeVisible();
+    await expect(page.getByText('ghs_DO_NOT_DISPLAY', { exact: false })).toHaveCount(0);
+    const downloadEvent = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'הורדת דוח', exact: true }).click();
+    const report = await downloadEvent;
+    const reportPath = await report.path();
+    const reportText = await fs.readFile(reportPath!, 'utf8');
+    expect(reportText).toContain('GIT_AUTH_FAILED');
+    expect(reportText).not.toContain('ghs_DO_NOT_DISPLAY');
+    await page.screenshot({ path: 'test-results/detailed-error.png', fullPage: true });
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'סקירת השרת', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'משימות רקע', exact: true }).click();
+    await page.getByText('פרטי השגיאה והמלצה לטיפול', { exact: true }).click();
+    await expect(page.getByText('GIT_AUTH_FAILED', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
     await page.getByRole('button', { name: 'החלפת ערכת צבעים' }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

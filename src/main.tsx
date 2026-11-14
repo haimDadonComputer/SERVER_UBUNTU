@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import './style.css';
 import { GitHubSettings, GitHubImport } from './github';
+import { ErrorDetails } from './diagnostics';
 type Any = Record<string, any>;
 let csrf = '';
 async function api(url: string, method = 'GET', body?: unknown) {
@@ -50,7 +51,7 @@ async function api(url: string, method = 'GET', body?: unknown) {
     if (!r.ok) {
         if (r.status === 401 && url !== '/login' && url !== '/me')
             window.dispatchEvent(new Event('expired'));
-        throw new Error(data.error || 'הפעולה נכשלה');
+        throw Object.assign(new Error(data.error || 'הפעולה נכשלה'), { details: data.details });
     }
     return data;
 }
@@ -92,6 +93,7 @@ function App() {
         [page, setPage] = useState('dashboard'),
         [dark, setDark] = useState(localStorage.getItem('theme') !== 'light'),
         [error, setError] = useState(''),
+        [errorDetails, setErrorDetails] = useState<Any | null>(null),
         [notice, setNotice] = useState(''),
         [pending, setPending] = useState(false),
         [metrics, setMetrics] = useState<Any>({}),
@@ -149,6 +151,7 @@ function App() {
         if (pending) return;
         setPending(true);
         setError('');
+        setErrorDetails(null);
         try {
             const result = await fn();
             if (message)
@@ -156,6 +159,7 @@ function App() {
             return result;
         } catch (e) {
             setError((e as Error).message);
+            setErrorDetails((e as Any).details || null);
         } finally {
             setPending(false);
         }
@@ -170,7 +174,13 @@ function App() {
         ]);
         if (results[0].status === 'fulfilled') setMetrics(results[0].value);
         if (results[1].status === 'fulfilled') setInv(results[1].value);
-        else setInv({ ports: [], services: [], error: results[1].reason.message });
+        else
+            setInv({
+                ports: [],
+                services: [],
+                error: results[1].reason.message,
+                details: results[1].reason.details,
+            });
         if (results[2].status === 'fulfilled') setProjects(results[2].value);
         if (results[3].status === 'fulfilled') setJobs(results[3].value);
         if (results[4].status === 'fulfilled') setSettings(results[4].value);
@@ -671,7 +681,10 @@ function App() {
                     {error && (
                         <div role="alert" className="alert error">
                             <AlertTriangle size={18} />
-                            {error}
+                            <div className="grow">
+                                {error}
+                                <ErrorDetails details={errorDetails} />
+                            </div>
                             <button aria-label="סגירה" onClick={() => setError('')}>
                                 <X size={16} />
                             </button>
@@ -1773,6 +1786,13 @@ function App() {
                                                 {j.resource} · {j.created}
                                             </small>
                                             {j.error && <p className="danger-text">{j.error}</p>}
+                                            <ErrorDetails details={j.details} jobId={j.id} />
+                                            {j.error && !j.details && (
+                                                <small>
+                                                    לשגיאה זו לא נשמר פירוט נוסף. ניסיון חדש לאחר
+                                                    העדכון ייצור דוח מפורט.
+                                                </small>
+                                            )}
                                         </div>
                                         <Badge value={j.status} />
                                     </div>
@@ -2243,6 +2263,7 @@ function Confirm({ title, text, onClose, onConfirm }: Any) {
 }
 function Form({ title, description, fields, onClose, submit, children }: Any) {
     const [busy, setBusy] = useState(false),
+        [details, setDetails] = useState<Any | null>(null),
         [error, setError] = useState('');
     return (
         <Info title={title} onClose={onClose}>
@@ -2262,6 +2283,7 @@ function Form({ title, description, fields, onClose, submit, children }: Any) {
                         await submit(values);
                     } catch (e) {
                         setError((e as Error).message);
+                        setDetails((e as Any).details || null);
                     } finally {
                         setBusy(false);
                     }
@@ -2294,7 +2316,10 @@ function Form({ title, description, fields, onClose, submit, children }: Any) {
                 ))}
                 {error && (
                     <div role="alert" className="alert error">
-                        {error}
+                        <div className="grow">
+                            {error}
+                            <ErrorDetails details={details} />
+                        </div>
                     </div>
                 )}
                 <div className="modal-buttons">

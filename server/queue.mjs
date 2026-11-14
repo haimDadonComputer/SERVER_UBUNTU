@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './security.mjs';
 import { audit } from './db.mjs';
+import { sanitizeDetails } from './diagnostics.mjs';
 export class Queue {
     constructor(db) {
         this.db = db;
@@ -27,11 +28,18 @@ export class Queue {
                     .run(id);
             } catch (e) {
                 audit(this.db, 'system', 'job-failed', resource, 'failed');
+                const details = sanitizeDetails(e.details) || {
+                    code: 'JOB_FAILED',
+                    stage: this.db.prepare('SELECT stage FROM jobs WHERE id=?').get(id)?.stage,
+                    action: resource,
+                    time: new Date().toISOString(),
+                    hint: 'לא התקבל פירוט נוסף מהרכיב שנכשל. בדקו את השלב והודעת השגיאה.',
+                };
                 this.db
                     .prepare(
-                        "UPDATE jobs SET status='failed',error=?,finished=CURRENT_TIMESTAMP WHERE id=?"
+                        "UPDATE jobs SET status='failed',error=?,error_details=?,finished=CURRENT_TIMESTAMP WHERE id=?"
                     )
-                    .run(redact(e.message).slice(0, 500), id);
+                    .run(redact(e.message).slice(0, 1200), JSON.stringify(details), id);
             } finally {
                 this.locks.delete(resource);
             }

@@ -58,12 +58,18 @@
             "description": "Use a Node launcher to select python3 on Ubuntu and python on Windows; propagate test failures without shell or system-wide aliases"
         },
         {
+            "id": "detailed-operation-errors",
+            "status": "done",
+            "description": "Structured redacted runner/helper diagnostics, persistent job error details, API/GitHub request metadata, and expandable copy/download UI",
+            "verification": "Command/auth/permission/timeout/credential-redaction tests, database-reopen persistence, API forwarding and browser failure report/download/reload checks. Actual server clone cause remains to be diagnosed after deployment."
+        },
+        {
             "id": "validation",
             "status": "done",
             "progress": 100,
             "checks": {
-                "node": 11,
-                "python": 34,
+                "node": 13,
+                "python": 40,
                 "pythonSkipped": 1,
                 "browser": 1,
                 "productionBuild": "passed",

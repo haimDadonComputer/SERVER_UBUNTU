@@ -1,15 +1,26 @@
 #!/usr/bin/python3
 """Root-owned, local-only privileged boundary. No shell and no caller-supplied commands."""
 import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib, tempfile
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
+from diagnostics import failure,decode,exception_details,OperationError,clean
 
 CONFIG = '/etc/ubuntu-control/helper.json'
 LOCK = threading.RLock()
 ENV = {'PATH': '/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_COLORS': '0'}
 
 def run(argv, timeout=20, check=True, input_text=None):
-    p = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, env=ENV, cwd='/')
+    secrets=[]
+    if input_text:
+        try:secrets=[json.loads(input_text).get('token','')]
+        except (ValueError,AttributeError):pass
+    try:p = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, env=ENV, cwd='/')
+    except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,'system-command','/',secrets) from None
     if check and p.returncode:
-        raise ValueError('System command failed: ' + pathlib.Path(argv[0]).name)
+        child=decode(p.stderr,secrets)
+        if child:
+            child.details['launcher']=clean({'command':argv,'cwd':'/','exitCode':p.returncode},secrets)
+            raise child
+        raise failure(argv,'/','system-command',returncode=p.returncode,stdout=p.stdout,stderr=p.stderr,secrets=secrets)
     return p.stdout[:4000000]
 
 def load_config():
@@ -341,9 +352,9 @@ def github_broker(action,args=None):
                 part=conn.recv(65536)
                 if not part or len(data)>16000000:raise ValueError('Invalid GitHub broker response')
                 data+=part
-        except OSError:raise ValueError('שירות GitHub App אינו זמין. בדקו שהשדרוג הותקן ושירות ubuntu-control-github פעיל.') from None
+        except OSError as error:raise exception_details(error,'github-broker-connect','/') from None
     result=json.loads(data.split(b'\n')[0])
-    if not result.get('ok'):raise ValueError(result.get('error','GitHub request failed'))
+    if not result.get('ok'):raise OperationError(result.get('error','GitHub request failed'),result.get('details') or {'code':'GITHUB_BROKER','stage':action})
     return result['data']
 
 def import_github_project(cfg,args):
@@ -485,12 +496,16 @@ def serve():
                     data+=chunk
                     if len(data)>100000: raise ValueError('Request too large')
                 request=json.loads(data.split(b'\n')[0])
+                if not isinstance(request,dict) or not isinstance(request.get('action'),str) or len(request['action'])>80 or not isinstance(request.get('args',{}),dict):raise ValueError('Invalid helper request')
                 with LOCK: result=dispatch(cfg,request['action'],request.get('args',{}))
                 conn.sendall((json.dumps({'ok':True,'data':result})+'\n').encode())
             except Exception as e:
                 # Exception text is limited to controlled validation/system errors, never subprocess output.
                 message=str(e) if isinstance(e,ValueError) else 'System operation failed; inspect helper service'
-                try: conn.sendall((json.dumps({'ok':False,'error':message})+'\n').encode())
+                action=request.get('action') if isinstance(locals().get('request'),dict) and isinstance(request.get('action'),str) else 'helper-request'
+                details=getattr(e,'details',None) or exception_details(e,action,'/').details
+                if details:details={**details,'action':request.get('action') if isinstance(locals().get('request'),dict) else None}
+                try: conn.sendall((json.dumps({'ok':False,'error':message,'details':details})+'\n').encode())
                 except OSError: pass
     while True:
         conn,_=server.accept(); threading.Thread(target=client,args=(conn,),daemon=True).start()

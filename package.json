@@ -1,0 +1,43 @@
+{
+    "name": "ubuntu-control",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=24.11.0"
+    },
+    "scripts": {
+        "dev": "concurrently -k \"node --watch server/index.mjs\" \"vite --host 127.0.0.1\"",
+        "build": "tsc --noEmit && vite build",
+        "start": "node server/index.mjs",
+        "admin": "node server/admin.mjs",
+        "test": "node --test tests/*.test.mjs",
+        "check:helper": "python -m unittest discover -s tests -p test_*.py",
+        "test:ui": "playwright test"
+    },
+    "dependencies": {
+        "argon2": "^0.44.0",
+        "dotenv": "^17.2.3",
+        "express": "^5.1.0",
+        "express-rate-limit": "^8.2.1",
+        "helmet": "^8.1.0",
+        "lucide-react": "^0.468.0",
+        "otpauth": "^9.4.1",
+        "qrcode": "^1.5.4",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
+        "ws": "^8.18.3",
+        "zod": "^4.1.12"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.65.1",
+        "@types/qrcode": "^1.5.6",
+        "@types/react": "^19.2.2",
+        "@types/react-dom": "^19.2.2",
+        "@vitejs/plugin-react": "^5.1.0",
+        "concurrently": "^9.2.1",
+        "prettier": "^3.10.1",
+        "typescript": "^5.9.3",
+        "vite": "^7.2.2"
+    }
+}

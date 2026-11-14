@@ -1,0 +1,18 @@
+[Unit]
+Description=Rootless Docker project (replace my-app and PROJECT_UID)
+After=network-online.target
+
+[Service]
+User=ubuntu-projects
+Group=ubuntu-projects
+Environment=DOCKER_HOST=unix:///run/user/PROJECT_UID/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/PROJECT_UID
+ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/docker_launcher.py /srv/ubuntu-projects/my-app 3000 3000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectHome=read-only
+InaccessiblePaths=/var/lib/ubuntu-control /etc/ubuntu-control/app.env
+
+[Install]
+WantedBy=multi-user.target

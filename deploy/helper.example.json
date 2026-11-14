@@ -1,0 +1,16 @@
+{
+    "socket": "/run/ubuntu-control/helper.sock",
+    "web_user": "ubuntu-control",
+    "web_group": "ubuntu-control",
+    "project_user": "ubuntu-projects",
+    "project_root": "/srv/ubuntu-projects",
+    "state_dir": "/var/lib/ubuntu-control-helper",
+    "protected_ports": [22, 80, 443, 3080, 3306, 5432, 6379, 27017],
+    "protected_services": [],
+    "ufw_verified_host_network": false,
+    "pm2_enabled": false,
+    "pm2_binary": "/usr/local/bin/pm2",
+    "pm2_home": "/var/lib/ubuntu-projects/pm2",
+    "services": [],
+    "projects": {}
+}

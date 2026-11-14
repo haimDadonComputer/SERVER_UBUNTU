@@ -1,0 +1,21 @@
+# Bind to a VPN address; never add a public listen without explicit access policy.
+# Replace every placeholder. TLS certificates must already exist.
+server {
+    listen VPN_ADDRESS:443 ssl;
+    server_name control.example.com;
+    ssl_certificate /etc/ssl/control/fullchain.pem;
+    ssl_certificate_key /etc/ssl/control/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    allow VPN_CIDR;
+    deny all;
+    client_max_body_size 2m;
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_http_version 1.1;
+        proxy_read_timeout 90s;
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}

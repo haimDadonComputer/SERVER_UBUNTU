@@ -1,0 +1,28 @@
+[Unit]
+Description=Ubuntu Control restricted privileged helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=ubuntu-control
+WorkingDirectory=/opt/ubuntu-control
+ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/helper.py
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=ubuntu-control
+RuntimeDirectoryMode=0750
+UMask=0077
+ProtectSystem=full
+ReadWritePaths=/etc/ufw /etc/ubuntu-control/projects
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# runuser needs SETUID/SETGID; UFW needs NET_ADMIN. Docker stays behind allowlisted actions.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_PTRACE CAP_AUDIT_WRITE
+
+[Install]
+WantedBy=multi-user.target

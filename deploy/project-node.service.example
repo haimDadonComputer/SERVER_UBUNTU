@@ -1,0 +1,28 @@
+[Unit]
+Description=Managed Node project (replace my-app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu-projects
+Group=ubuntu-projects
+WorkingDirectory=/srv/ubuntu-projects/my-app/current
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Environment=WWEBJS_DATA_PATH=/srv/ubuntu-projects/my-app/shared/whatsapp
+Environment=PUPPETEER_EXECUTABLE_PATH=/snap/bin/chromium
+EnvironmentFile=-/etc/ubuntu-control/projects/my-app.env
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+RestartSec=5
+UMask=0007
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/ubuntu-projects/my-app/shared /var/lib/ubuntu-projects
+InaccessiblePaths=/var/lib/ubuntu-control /etc/ubuntu-control/app.env -/etc/ubuntu-control/hetzner.token
+
+[Install]
+WantedBy=multi-user.target

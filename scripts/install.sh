@@ -5,6 +5,7 @@ umask 077
 source /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || { echo 'Ubuntu 24.04 LTS is required'; exit 1; }
 SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$SOURCE_DIR/scripts/install-permissions.sh"
 for target in /opt/ubuntu-control /etc/ubuntu-control /etc/systemd/system/ubuntu-control.service /etc/systemd/system/ubuntu-control-helper.service; do
   [[ ! -e $target && ! -L $target ]] || { echo "Refusing to overwrite $target. See INSTALL.md for upgrades."; exit 1; }
 done
@@ -28,19 +29,16 @@ install -d -m 0755 -o root -g root /opt/ubuntu-control
 for entry in package.json package-lock.json tsconfig.json vite.config.ts playwright.config.ts index.html src server helper deploy scripts tests README.md INSTALL.md VALIDATION.md AGENTS.md TASKS.json; do
   cp -R -- "$SOURCE_DIR/$entry" /opt/ubuntu-control/
 done
-chown -R root:root /opt/ubuntu-control
-chmod -R go-w /opt/ubuntu-control
 # Build dependencies can write only their own modules and build output, never the
 # helper, installer, service units or source that will later run with privileges.
-install -d -m 0755 -o ubuntu-control -g ubuntu-control /opt/ubuntu-control/node_modules /opt/ubuntu-control/dist
+prepare_install_tree /opt/ubuntu-control ubuntu-control ubuntu-control
 cd /opt/ubuntu-control
 # Dependency lifecycle scripts and build tools never execute as root.
 runuser -u ubuntu-control -- npm ci
 runuser -u ubuntu-control -- npm test
 runuser -u ubuntu-control -- npm run build
 runuser -u ubuntu-control -- npm prune --omit=dev --package-lock=false
-chown -R root:root /opt/ubuntu-control
-chmod -R go-w /opt/ubuntu-control
+lock_install_tree /opt/ubuntu-control
 install -m 0600 deploy/helper.example.json /etc/ubuntu-control/helper.json
 MASTER_KEY=$(openssl rand -hex 32)
 cat > /etc/ubuntu-control/app.env <<EOF

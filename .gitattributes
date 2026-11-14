@@ -1,0 +1,2 @@
+# Install and permission tests must remain valid Bash after Windows checkouts.
+*.sh text eol=lf

@@ -13,5 +13,6 @@ jobs:
       - run: npm test
       - run: npm run check:helper
       - run: npm run build
-      - run: bash -n scripts/install.sh
+      - run: for script in scripts/*.sh tests/install-permissions.sh; do bash -n "$script"; done
+      - run: sudo env "PATH=$PATH" bash tests/install-permissions.sh
       - run: python3 -m py_compile helper/*.py

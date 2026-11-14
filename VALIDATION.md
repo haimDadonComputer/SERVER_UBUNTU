@@ -20,3 +20,11 @@ Not verified locally:
 - Remote TLS/VPN setup, reboot behavior, real resource load and restore of an operational server.
 
 Run the acceptance checklist in INSTALL.md on a disposable Ubuntu 24.04 server before operational use. Build success and mocks do not certify a production deployment.
+
+## Installer permission fix — 2026-11-14
+
+The source copy performed under `umask 077` could leave root-owned files at 0600 and directories at 0700. Removing group/other write bits did not give the service user read/traverse access. The installer now sets source files to 0644 and directories to 0755 before running npm, grants temporary ownership only of node_modules/dist, and restores root ownership plus read/execute access without non-root writes afterwards. Configuration secrets and runtime directory permissions are outside this normalization.
+
+Re-run locally after this change: 8 Node tests, 13 Python tests and the production build passed. Bash syntax checks passed for the installer, its shared permission functions and the regression test; `git diff --check` passed. Shell files are pinned to LF in .gitattributes.
+
+`tests/install-permissions.sh` adds a real Linux UID/permission test using an isolated temporary tree and the existing nobody account. It runs offline npm ci/prune, asserts source/helper/service-template writes are denied, verifies writable build directories, then checks locked runtime modules and executable dependency bins. It also checks that a private file outside the application tree stays unreadable. This test is wired into Ubuntu 24.04 GitHub Actions. It was **not executed locally**: this Windows host has no WSL distribution or running Docker Linux engine. The complete installer was not executed on a clean Ubuntu host in this session.

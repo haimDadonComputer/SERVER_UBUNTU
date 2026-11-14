@@ -32,6 +32,13 @@
             "verification": "Bash syntax checked; installer not executed on Ubuntu"
         },
         {
+            "id": "installer-source-permissions",
+            "status": "implemented",
+            "progress": 100,
+            "description": "Explicit root-owned 0644 source and 0755 directories before non-root npm; only node_modules/dist writable during build; readable locked runtime afterwards",
+            "verification": "Linux npm/UID regression test added to Ubuntu CI; local Windows verification recorded in VALIDATION.md"
+        },
+        {
             "id": "validation",
             "status": "done",
             "progress": 100,

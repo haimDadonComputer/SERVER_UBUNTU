@@ -288,6 +288,9 @@ main {
     width: calc(100% - 238px);
 }
 header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
     height: 72px;
     border-bottom: 1px solid var(--border);
     padding: 0 38px;
@@ -1077,8 +1080,40 @@ footer span:first-child {
     box-shadow: 0 30px 100px #0005;
 }
 .modal .panel-heading {
+    background: var(--surface);
     padding: 20px 0;
     margin-bottom: 20px;
+}
+.modal > .panel-heading { position:sticky; top:0; z-index:3; }
+.modal .panel-heading > button,
+.jobs-drawer > .panel-heading > button {
+    flex-shrink: 0;
+    min-width: 36px;
+    min-height: 36px;
+}
+.jobs-drawer > .panel-heading {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--surface);
+}
+.modal {
+    max-height: calc(100dvh - 50px);
+    scroll-padding-top: 85px;
+}
+.port-state {
+    display: block;
+    font-size: 12px;
+    margin: 0 0 16px;
+    color: var(--muted);
+}
+.port-state[data-status='available'],
+.port-state[data-status='owned'] {
+    color: var(--green);
+}
+.port-state[data-status='occupied'],
+.port-state[data-status='reserved'] {
+    color: var(--orange);
 }
 .modal form {
     margin-top: 20px;

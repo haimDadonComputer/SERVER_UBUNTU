@@ -28,6 +28,13 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     let gate = Promise.resolve();
     const helper = async (action, args) => {
         calls.push([action, args]);
+        if (action === 'project-port-check')
+            return {
+                port: args.port,
+                listenAddress: args.listenAddress,
+                status: 'available',
+                listeners: [],
+            };
         if (action === 'project-env-meta')
             return { keys: ['API_KEY'], publicBuild: [], restartRequired: false };
         if (action === 'project-env-patch')
@@ -90,10 +97,20 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
         });
     assert.equal((await request('/projects/demo/env')).status, 401);
     assert.equal((await request('/project-access')).status, 401);
+    assert.equal((await request('/projects/demo/port-check?port=3000')).status, 401);
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
     assert.equal((await request('/project-access')).status, 200);
+    assert.equal(
+        (await (await request('/projects/demo/port-check?port=3000')).json()).status,
+        'available'
+    );
+    assert.equal((await request('/projects/demo/port-check?port=22')).status, 400);
+    assert.equal(
+        (await request('/projects/demo/port-check?port=3000&listenAddress=evil.test')).status,
+        400
+    );
     assert.equal(
         (
             await request('/projects/demo/env/import', 'POST', {

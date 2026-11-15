@@ -337,6 +337,11 @@ class Lifecycle:
                 emit('starting')
                 if p.get('externalService'):
                     self.h['service_action'](self.cfg,{'service':p['externalService'],'operation':'stop','confirmed':True});p.pop('externalService',None)
+                if p['runtime']['kind']=='node' and p['runtime'].get('port'):
+                    from project_ports import check_port
+                    status=check_port(self,identifier,p['runtime']['port'],p['runtime'].get('listenAddress','127.0.0.1')) if 'parse_ss' in self.h else {'status':'unknown'}
+                    if status['status'] in ('occupied','reserved'):
+                        raise OperationError('פורט ההפעלה תפוס או שמור לפרויקט אחר',{'code':'PROJECT_PORT_CONFLICT','stage':'port-check','stderr':json.dumps(status,ensure_ascii=False),'hint':'בחרו פורט פנוי או עצרו במפורש את התהליך המתנגש. המערכת אינה עוצרת תהליכים אחרים אוטומטית.'})
                 self.h['run'](['/usr/bin/systemctl','restart',self.names(identifier)['unit']],timeout=45)
                 emit('health');self.health(identifier,p)
                 p.update(desired='running',activeCommit=p['preparedCommit'],envPending=False,deployment='healthy')

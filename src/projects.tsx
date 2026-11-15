@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ErrorDetails } from './diagnostics';
 import { NetworkSettings } from './network';
+import { stageLabel } from './jobs';
 type Data = Record<string, any>;
 type Api = (path: string, method?: string, body?: unknown) => Promise<any>;
 function Popup({
@@ -49,6 +50,7 @@ export function ProjectActions({
     totpEnabled,
     serverAddresses = [],
     publication,
+    jobs = [],
 }: {
     project: Data;
     api: Api;
@@ -58,15 +60,58 @@ export function ProjectActions({
     totpEnabled: boolean;
     serverAddresses?: Data[];
     publication?: Data;
+    jobs?: Data[];
 }) {
     const [modal, setModal] = useState(''),
-        [busy, setBusy] = useState(false),
+        [requestBusy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null),
         [typed, setTyped] = useState(''),
         [password, setPassword] = useState(''),
         [code, setCode] = useState('');
     const [launchUrl, setLaunchUrl] = useState(p.launch_url || '');
+    const [pendingJob, setPendingJob] = useState<Data | null>(null);
+    const running = jobs.find(
+        (job) => job.resource === 'project:' + p.id && ['queued', 'running'].includes(job.status)
+    );
+    const observed = pendingJob && jobs.find((job) => job.id === pendingJob.id);
+    const activeJob = running || (pendingJob && !observed ? pendingJob : null);
+    const busy = requestBusy || !!activeJob || !!p.recoveryPending;
+    useEffect(() => {
+        if (observed && !['queued', 'running'].includes(observed.status)) setPendingJob(null);
+    }, [observed?.status]);
+    useEffect(() => {
+        if (!pendingJob) return;
+        let stopped = false;
+        const poll = () =>
+            api('/jobs/' + pendingJob.id + '/events')
+                .then((result) => {
+                    if (stopped) return;
+                    if (['queued', 'running'].includes(result.job.status))
+                        setPendingJob((previous) =>
+                            previous ? { ...previous, ...result.job } : null
+                        );
+                    else {
+                        setPendingJob(null);
+                        void refresh();
+                    }
+                })
+                .catch(() => {});
+        const timer = setInterval(poll, 2000);
+        return () => {
+            stopped = true;
+            clearInterval(timer);
+        };
+    }, [pendingJob?.id]);
+    const progress = (operation: string, label: string) =>
+        activeJob?.action === 'project-' + operation ? (
+            <>
+                <Loader2 className="spin" size={14} />
+                {activeJob.status === 'queued' ? 'ממתין בתור' : stageLabel(activeJob.stage)}
+            </>
+        ) : (
+            label
+        );
     const address = serverAddresses.find((a) => a.address !== location.hostname)?.address;
     const automaticUrl =
         p.runtime?.health === 'http' &&
@@ -82,6 +127,14 @@ export function ProjectActions({
         setError('');
         try {
             const result = await api(`/projects/${p.id}/` + path, method, body);
+            if (result.job)
+                setPendingJob({
+                    id: result.job,
+                    resource: 'project:' + p.id,
+                    action: 'project-' + path,
+                    status: 'queued',
+                    stage: 'ממתין בתור',
+                });
             setModal('');
             await refresh();
             if (result.job) onQueued();
@@ -110,7 +163,11 @@ export function ProjectActions({
                             <RotateCw size={14} />
                             שחזור מהארכיון
                         </button>
-                        <button className="text-btn danger-text" onClick={() => setModal('purge')}>
+                        <button
+                            className="text-btn danger-text"
+                            disabled={busy}
+                            onClick={() => setModal('purge')}
+                        >
                             <Trash2 size={14} />
                             מחיקה לצמיתות
                         </button>
@@ -140,7 +197,7 @@ export function ProjectActions({
                                 onClick={() => setModal(p.runtime ? 'start' : 'runtime')}
                             >
                                 <Play size={15} />
-                                הפעלת פרויקט
+                                {progress('start', 'הפעלת פרויקט')}
                             </button>
                             <button className="secondary" onClick={() => openConsole(p.id)}>
                                 <Terminal size={15} />
@@ -154,7 +211,11 @@ export function ProjectActions({
                             </summary>
                             <div className="project-action-group">
                                 <span>הפעלה ופריסה</span>
-                                <button className="secondary" onClick={() => setModal('runtime')}>
+                                <button
+                                    className="secondary"
+                                    disabled={busy}
+                                    onClick={() => setModal('runtime')}
+                                >
                                     <Settings size={14} />
                                     הגדרות הפעלה
                                 </button>
@@ -164,7 +225,7 @@ export function ProjectActions({
                                     onClick={() => setModal('stop')}
                                 >
                                     <Square size={14} />
-                                    עצירה
+                                    {progress('stop', 'עצירה')}
                                 </button>
                                 <button
                                     className="secondary"
@@ -172,7 +233,7 @@ export function ProjectActions({
                                     onClick={() => setModal('restart')}
                                 >
                                     <RotateCw size={14} />
-                                    הפעלה מחדש
+                                    {progress('restart', 'הפעלה מחדש')}
                                 </button>
                                 <button
                                     className="secondary"
@@ -180,13 +241,14 @@ export function ProjectActions({
                                     onClick={() => setModal('activate')}
                                 >
                                     <RefreshCw size={14} />
-                                    עדכון ופריסה
+                                    {progress('activate', 'עדכון ופריסה')}
                                 </button>
                             </div>
                             <div className="project-action-group">
                                 <span>גישה ופרסום</span>
                                 <button
                                     className="secondary"
+                                    disabled={busy}
                                     onClick={() => setModal('publication')}
                                 >
                                     <ExternalLink size={14} />
@@ -206,6 +268,7 @@ export function ProjectActions({
                                 <span>ארכיון</span>
                                 <button
                                     className="text-btn danger-text"
+                                    disabled={busy}
                                     onClick={() => setModal('archive')}
                                 >
                                     <Archive size={14} />
@@ -546,7 +609,7 @@ function RuntimeEditor({
                         ...r,
                         script: data.scripts.includes('start') ? 'start' : data.scripts[0] || '',
                         entry: data.entries[0] || '',
-                        testScript: data.scripts.includes('test') ? 'test' : '',
+                        testScript: '',
                         buildScript: data.scripts.includes('build') ? 'build' : '',
                     }));
             })
@@ -556,6 +619,28 @@ function RuntimeEditor({
             });
     }, [p.id]);
     const set = (key: string, value: any) => setRuntime({ ...runtime, [key]: value });
+    const [portState, setPortState] = useState<Data | null>(null);
+    useEffect(() => {
+        let stopped = false;
+        const port = Number(runtime.port);
+        setPortState(null);
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) return;
+        const timer = setTimeout(() => {
+            api(
+                `/projects/${p.id}/port-check?port=${port}&listenAddress=${runtime.listenAddress || '127.0.0.1'}`
+            )
+                .then((result) => {
+                    if (!stopped) setPortState(result);
+                })
+                .catch(() => {
+                    if (!stopped) setPortState({ status: 'unknown' });
+                });
+        }, 350);
+        return () => {
+            stopped = true;
+            clearTimeout(timer);
+        };
+    }, [p.id, runtime.port, runtime.listenAddress]);
     return (
         <Popup title="הגדרות הפעלת הפרויקט" onClose={close}>
             <p className="muted">
@@ -767,6 +852,33 @@ function RuntimeEditor({
                             }
                         />
                     </label>
+                    {Number.isInteger(runtime.port) &&
+                        runtime.port >= 1024 &&
+                        runtime.port <= 65535 && (
+                            <small
+                                className="port-state"
+                                role="status"
+                                data-status={portState?.status || 'checking'}
+                            >
+                                {(
+                                    {
+                                        available: 'הפורט פנוי בבדיקה הנוכחית',
+                                        owned: 'הפורט בשימוש הפרויקט הנוכחי',
+                                        occupied: 'הפורט תפוס בידי תהליך אחר',
+                                        reserved: 'הפורט שמור לפרויקט אחר',
+                                        unknown: 'לא ניתן לבדוק את זמינות הפורט',
+                                    } as Data
+                                )[portState?.status] || 'בודק זמינות פורט…'}
+                                {portState?.project && ` · ${portState.project}`}
+                                {portState?.listeners?.map((listener: Data, index: number) => (
+                                    <span key={index}>
+                                        {' '}
+                                        · {listener.process || 'תהליך לא מזוהה'}
+                                        {listener.pid ? ` (PID ${listener.pid})` : ''}
+                                    </span>
+                                ))}
+                            </small>
+                        )}
                     {runtime.health === 'http' && (
                         <label>
                             נתיב HTTP לבדיקה

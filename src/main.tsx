@@ -1431,6 +1431,7 @@ function App() {
                                             }
                                             serverAddresses={serverAddresses}
                                             publication={publications[p.id]}
+                                            jobs={jobs}
                                             console={openProjectConsole}
                                             totpEnabled={!!user.totpEnabled}
                                         />
@@ -1843,6 +1844,7 @@ function App() {
                                 }
                                 serverAddresses={serverAddresses}
                                 publication={publications[fileProject.id]}
+                                jobs={jobs}
                                 console={openProjectConsole}
                                 totpEnabled={!!user.totpEnabled}
                             />

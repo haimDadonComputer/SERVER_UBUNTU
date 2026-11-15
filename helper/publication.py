@@ -36,7 +36,7 @@ class Publication:
         atomic_private(self.path(name),text);self.path(name).chmod(0o644)
     def ready(self):
         if not self.directory.is_dir() or self.directory.is_symlink() or not (self.acme/'prepared').is_file():
-            raise ValueError('Run sudo bash /opt/ubuntu-control/scripts/setup-publication.sh first')
+            raise ValueError('HTTPS preparation is incomplete. Run scripts/upgrade.sh from the source checkout; it prepares Nginx and Certbot automatically')
         self.h['run'](['/usr/sbin/nginx','-t'])
     def status(self):
         data=self.read()
@@ -101,11 +101,14 @@ class Publication:
         atomic_private(self.state/('backup-'+str(__import__('time').time_ns())+'.json'),json.dumps(journal))
         atomic_private(pending,json.dumps(journal))
         try:
+            emit('proxy-configuration','Writing managed proxy configuration')
             for name,text in changes.items():
                 if text is None:self.path(name).unlink(missing_ok=True)
                 else:self.write(name,text)
+            emit('proxy-validation','Checking Nginx configuration')
             self.h['run'](['/usr/sbin/nginx','-t'])
             for port in journal['added']:self.fw_rule(journal['ip'],port)
+            emit('proxy-reload','Applying validated proxy configuration')
             self.h['run'](['/usr/bin/systemctl','reload','nginx.service'])
             for port in journal['removed']:self.fw_rule(journal['ip'],port,True)
             self.save(after);pending.unlink()
@@ -129,7 +132,8 @@ class Publication:
             restored=copy.deepcopy(data);restored.pop('challengePending',None)
             self.transaction(data,restored,{'challenge.conf':None})
     def challenge(self,data):
-        return 'server {\n listen '+data['ip']+':80;\n server_name _;\n location ^~ /.well-known/acme-challenge/ { root /var/lib/ubuntu-control-acme; }\n location / { return 404; }\n}\n'
+        redirect=' if ($host = '+data['domain']+') { return 308 https://'+data['domain']+'$request_uri; }' if data.get('management') and data.get('domain') else ''
+        return 'server {\n listen '+data['ip']+':80;\n server_name _;\n location ^~ /.well-known/acme-challenge/ { root /var/lib/ubuntu-control-acme; }\n location / {'+redirect+' return 404; }\n}\n'
     def cert_path(self,kind):return self.acme/'certbot/live'/kind
     def certificate(self,kind,identifier,data,staging=False):
         if not data['email']:raise ValueError('Certificate email is required')
@@ -181,8 +185,10 @@ class Publication:
             if before==data:return self.status()
             self.ready();changes={name:None}
             if not data['projects'] and not data['management']:changes['challenge.conf']=None
+            elif management:changes['challenge.conf']=self.challenge(data)
             self.transaction(before,data,changes);return self.status()
         self.ready()
+        emit('network-preflight','Checking public interface and firewall prerequisites')
         if not data['ip']:raise ValueError('Configure the public server IP first')
         self.interfaces(data['ip'])
         self.fw_status()
@@ -224,6 +230,7 @@ class Publication:
             port=args.get('port',runtime['port']);upstream=runtime['port'];tls=args.get('https') is True;previous=identifier in data['projects']
             if type(port)!=int or not 1024<=port<=65535 or port==3080 or port in self.cfg.get('protected_ports',[22,80,443,3080]):raise ValueError('Invalid or protected public port')
             if any(key!=identifier and item['port']==port for key,item in data['projects'].items()):raise ValueError('Public port reserved by another project')
+        emit('port-check','Checking publication port '+str(port))
         self.listeners(data['ip'],port,previous)
         # Challenge listener is a shared managed resource, never take over an existing listener.
         challenge_ready=self.path('challenge.conf').exists()
@@ -244,7 +251,9 @@ class Publication:
         if management:data['management']=True
         else:data['projects'][identifier]={'enabled':True,'port':port,'https':tls,'upstream':upstream,'url':('https' if tls else 'http')+'://'+data['ip']+':'+str(port)+'/','externalReachability':'unverified'}
         data.pop('challengePending',None)
-        try:self.transaction(before,data,{name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]))})
+        changes={name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]))}
+        if management:changes['challenge.conf']=self.challenge(data)
+        try:self.transaction(before,data,changes)
         except Exception:
             if not challenge_ready and not (self.state/'pending.json').exists():self.clear_bootstrap()
             raise

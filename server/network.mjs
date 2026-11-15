@@ -26,12 +26,16 @@ export function registerNetwork({ app, db, helper, queue, reauth, config }) {
     });
     function enqueue(req, res, action, args, resource) {
         const username = req.session.username;
-        const job = queue.add(resource, async (stage) => {
-            stage(action);
-            const state = await helper(action, args, stage);
-            if (action !== 'network-certificate-test') save(state);
-            audit(db, username, action, resource);
-        });
+        const job = queue.add(
+            resource,
+            async (stage) => {
+                stage(action);
+                const state = await helper(action, args, stage);
+                if (action !== 'network-certificate-test') save(state);
+                audit(db, username, action, resource);
+            },
+            action
+        );
         res.status(202).json({ job });
     }
     const publish = z.object({

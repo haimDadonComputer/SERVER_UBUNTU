@@ -6,6 +6,7 @@ from diagnostics import failure,decode,exception_details,OperationError,clean
 from project_lifecycle import Lifecycle,dispatch_lifecycle,READ_ACTIONS,MUTATIONS,REGISTRY_LOCK,BUILD_LOCK,PROJECT_LOCKS,project_lock,rehydrate,recover_transactions
 from project_logs import ProjectLogHub
 from project_secrets import parse_import
+from project_ports import check_port
 from job_progress import LOCAL as PROGRESS,execute as progress_execute
 from publication import dispatch_publication,Publication,NETWORK_LOCK
 PROJECT_LOG_HUB=None
@@ -435,6 +436,7 @@ def project_run(cfg, p, args, timeout=30):
 
 def dispatch(cfg, action, args):
     global PROJECT_LOG_HUB
+    if action=='project-port-check':return check_port(Lifecycle(cfg,globals()),project_identifier(args.get('project')),args.get('port'),args.get('listenAddress','127.0.0.1'))
     if action.startswith('network-'):return dispatch_publication(cfg,action,args,globals())
     if action=='project-env-preview':
         Lifecycle(cfg,globals()).lookup(project_identifier(args.get('project')))

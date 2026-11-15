@@ -159,6 +159,11 @@ test('queue serializes jobs, prevents duplicates and records failures', async (t
         throw new Error('password=secret');
     });
     assert.throws(() => queue.add('service:a', async () => {}));
+    const queued = queue.add('project:queued', async (stage) => stage('starting'), 'project-start');
+    assert.equal(
+        db.prepare('SELECT action FROM jobs WHERE id=?').get(queued).action,
+        'project-start'
+    );
     release();
     await queue.tail;
     const job = db.prepare('SELECT * FROM jobs WHERE id=?').get(id);

@@ -5,6 +5,16 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_management_redirect_keeps_acme_path_and_requires_valid_tls(self):
+        data=self.pub.read();data['management']=True
+        challenge=self.pub.challenge(data)
+        self.assertIn('location ^~ /.well-known/acme-challenge/',challenge)
+        self.assertIn('return 308 https://control.example.com$request_uri',challenge)
+        self.assertNotIn('return 308',self.pub.challenge({**data,'management':False}))
+        self.assertIn('listen 8.8.8.8:443 ssl;',self.pub.proxy(data,443,3080,True,True))
+        with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]),patch.object(self.pub,'certificate',side_effect=ValueError('certificate denied')):
+            with self.assertRaises(ValueError):self.pub.publish(None,{'enabled':True,'confirmed':True})
+        self.assertFalse(self.pub.read()['management']);self.assertFalse(self.pub.path('management.conf').exists())
     def test_proxy_blocks_storage_paths_but_keeps_management_upload_api_available(self):
         text=self.pub.proxy(self.pub.read(),3000,3000,False,storage=['data','runtime/cache'])
         self.assertIn('uploads?',text);self.assertIn('^/data(?:/|$)',text);self.assertIn('^/runtime/cache(?:/|$)',text)

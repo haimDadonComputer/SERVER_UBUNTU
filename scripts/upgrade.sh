@@ -60,6 +60,10 @@ BROKER_ACTIVE=$(systemctl is-active ubuntu-control-github.service || true)
 SWAPPED=false
 STOPPED=false
 UNITS_INSTALLED=false
+PUBLICATION_CONFIGURED=false
+PUBLICATION_TARGETS=(/etc/nginx/conf.d/ubuntu-control.conf /etc/systemd/system/ubuntu-control-helper.service.d/30-publication.conf /etc/systemd/system/ubuntu-control-cert-renew.service /etc/systemd/system/ubuntu-control-cert-renew.timer /etc/ubuntu-control-publication/prepared)
+PUBLICATION_TIMER_ACTIVE=$(systemctl is-active ubuntu-control-cert-renew.timer || true)
+PUBLICATION_TIMER_ENABLED=$(systemctl is-enabled ubuntu-control-cert-renew.timer || true)
 OLD_MODE=$(stat -c %a /opt/ubuntu-control)
 recover() {
   local status=$?
@@ -88,6 +92,24 @@ recover() {
     fi
     systemctl daemon-reload
   fi
+  if [[ $PUBLICATION_CONFIGURED == true ]]; then
+    systemctl stop ubuntu-control-cert-renew.timer || true
+    if [[ $PUBLICATION_TIMER_ENABLED != enabled && $PUBLICATION_TIMER_ENABLED != enabled-runtime ]]; then
+      systemctl disable ubuntu-control-cert-renew.timer || true
+    fi
+    for target in "${PUBLICATION_TARGETS[@]}"; do
+      saved="$BACKUP_DIR/publication-config/${target##*/}"
+      if [[ -f $saved ]]; then cp -a -- "$saved" "$target"; else rm -f -- "$target"; fi
+    done
+    systemctl daemon-reload
+    if [[ $PUBLICATION_TIMER_ENABLED == enabled ]]; then
+      systemctl enable ubuntu-control-cert-renew.timer || true
+    elif [[ $PUBLICATION_TIMER_ENABLED == enabled-runtime ]]; then
+      systemctl enable --runtime ubuntu-control-cert-renew.timer || true
+    fi
+    [[ $PUBLICATION_TIMER_ACTIVE != active ]] || systemctl start ubuntu-control-cert-renew.timer || true
+    /usr/sbin/nginx -t && systemctl reload nginx.service || true
+  fi
   if [[ $STOPPED == true ]]; then
     [[ $BROKER_ACTIVE != active ]] || systemctl start ubuntu-control-github.service || true
     [[ $HELPER_ACTIVE != active ]] || systemctl start ubuntu-control-helper.service || true
@@ -98,6 +120,8 @@ recover() {
   exit "$status"
 }
 trap recover ERR
+# Package installation happens while the existing management application is live.
+bash "$STAGE_DIR/scripts/setup-publication.sh" --dependencies-only
 # Short maintenance window begins only after the new immutable tree passes checks.
 check_idle
 STOPPED=true
@@ -106,6 +130,11 @@ if [[ $BROKER_ACTIVE == active ]]; then systemctl stop ubuntu-control-github.ser
 check_idle
 cp -a /etc/ubuntu-control "$BACKUP_DIR/etc-ubuntu-control"
 cp -a /var/lib/ubuntu-control-helper "$BACKUP_DIR/helper-state"
+install -d -m 0700 "$BACKUP_DIR/publication-config"
+for target in "${PUBLICATION_TARGETS[@]}"; do
+  [[ ! -L $target ]] || { echo "Unsafe publication configuration: $target"; false; }
+  [[ ! -f $target ]] || cp -a -- "$target" "$BACKUP_DIR/publication-config/${target##*/}"
+done
 if [[ -d /etc/ubuntu-control-publication ]]; then cp -a /etc/ubuntu-control-publication "$BACKUP_DIR/publication-secrets"; fi
 if [[ -d /etc/nginx/ubuntu-control ]]; then cp -a /etc/nginx/ubuntu-control "$BACKUP_DIR/publication-proxy"; fi
 # Runtime units are regenerated from the root registry. Preserve their current
@@ -138,6 +167,8 @@ mv -T /opt/ubuntu-control "$PREVIOUS_DIR"
 mv -T "$STAGE_DIR" /opt/ubuntu-control
 SWAPPED=true
 chmod 0700 "$PREVIOUS_DIR"
+PUBLICATION_CONFIGURED=true
+bash /opt/ubuntu-control/scripts/setup-publication.sh --configure-only
 systemctl daemon-reload
 systemctl enable ubuntu-control-github.service
 systemctl start ubuntu-control-github.service ubuntu-control-helper.service ubuntu-control.service
@@ -146,6 +177,7 @@ for i in {1..20}; do
     trap - ERR
     echo "Upgrade complete. Root-only backups: $BACKUP_DIR"
     echo 'Existing users, GitHub settings, projects and update policies were preserved.'
+    echo 'HTTPS dependencies and renewal are ready. Use the publication buttons; no separate preparation command or manual TLS key is required.'
     echo 'Review Project > Runtime settings. Existing projects remain manual and unconverted.'
     echo 'Upload/data mappings are applied on the next explicit project start/deploy. Running projects and their files are not changed by this upgrade.'
     echo 'Validate Node/Docker deployment and rollback on a test project before enabling automatic updates.'

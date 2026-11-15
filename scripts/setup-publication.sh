@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Explicit preparation only. Does not publish applications or open firewall rules.
+# Upgrade preparation (also callable directly). Never publishes sites or opens firewall rules.
 set -Eeuo pipefail
 umask 077
 SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+MODE=${1:-full}
+[[ $MODE == full || $MODE == --dependencies-only || $MODE == --configure-only ]] || { echo 'Invalid preparation mode'; exit 1; }
 [[ $EUID -eq 0 ]] || { echo 'Run with sudo bash'; exit 1; }
 source /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || { echo 'Ubuntu 24.04 required'; exit 1; }
@@ -16,6 +18,15 @@ command -v nginx >/dev/null || fresh=true
 for path in /etc/nginx/ubuntu-control /etc/ubuntu-control-publication /opt/ubuntu-control-acme /var/lib/ubuntu-control-acme; do
   [[ ! -L $path ]] || { echo "Unsafe symlink: $path"; exit 1; }
 done
+if [[ $MODE != --configure-only ]]; then
+deps_ready=false
+if command -v nginx >/dev/null && [[ -x /opt/ubuntu-control-acme/bin/certbot ]]; then
+  if /opt/ubuntu-control-acme/bin/certbot --version | python3 -c 'import re,sys; m=re.search(r"(\d+)\.(\d+)",sys.stdin.read()); sys.exit(0 if m and tuple(map(int,m.groups()))>=(5,4) else 1)'; then deps_ready=true; fi
+fi
+if [[ $deps_ready == false ]]; then
+if [[ $fresh == true && -e /etc/nginx/nginx.conf ]]; then
+  echo 'Existing Nginx configuration was found without its binary. Restore the existing package before automatic preparation; configuration was not changed.'; exit 1
+fi
 apt-get update
 if [[ $fresh == true ]]; then
   [[ ! -e /run/systemd/system/nginx.service && ! -L /run/systemd/system/nginx.service ]] || { echo 'Nginx already has a runtime override'; exit 1; }
@@ -33,6 +44,10 @@ if [[ $fresh == true ]]; then
 fi
 python3 -m venv /opt/ubuntu-control-acme
 /opt/ubuntu-control-acme/bin/pip install 'certbot>=5.4,<6'
+fi
+fi
+if [[ $MODE == --dependencies-only ]]; then echo 'HTTPS dependencies ready; no sites published or management service restarted.'; exit 0; fi
+[[ -x /usr/sbin/nginx && -x /opt/ubuntu-control-acme/bin/certbot ]] || { echo 'HTTPS dependencies are missing'; exit 1; }
 install -d -o root -g root -m 0755 /etc/nginx/ubuntu-control /var/lib/ubuntu-control-acme
 install -d -o root -g root -m 0700 /etc/ubuntu-control-publication
 include=/etc/nginx/conf.d/ubuntu-control.conf
@@ -57,7 +72,7 @@ done
 touch /etc/ubuntu-control-publication/prepared
 systemctl daemon-reload
 systemctl enable --now ubuntu-control-cert-renew.timer
-systemctl restart ubuntu-control-helper.service
+if [[ $MODE == full ]]; then systemctl restart ubuntu-control-helper.service; fi
 echo 'Prepared. Configure public IP, management domain and certificate email in Settings.'
 echo 'Existing proxy sites remain unchanged. Resolve any existing port-80 listener before first publication.'
 echo 'If UFW is active, verify host networking before setting ufw_verified_host_network in helper.json.'

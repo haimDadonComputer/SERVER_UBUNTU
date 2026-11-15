@@ -8,14 +8,16 @@ export class Queue {
         this.locks = new Set();
         this.tail = Promise.resolve();
     }
-    add(resource, work) {
+    add(resource, work, action = null) {
         if (this.locks.has(resource))
             throw Object.assign(new Error('פעולה אחרת כבר מתבצעת על המשאב'), { status: 409 });
         const id = randomUUID();
         this.locks.add(resource);
         this.db
-            .prepare("INSERT INTO jobs(id,resource,status,stage) VALUES(?,?,'queued','ממתין')")
-            .run(id, resource);
+            .prepare(
+                "INSERT INTO jobs(id,resource,status,stage,action) VALUES(?,?,'queued','ממתין',?)"
+            )
+            .run(id, resource, action ? redact(action).slice(0, 100) : null);
         this.tail = this.tail.then(async () => {
             let lastStage = '',
                 lastEvent = 0,

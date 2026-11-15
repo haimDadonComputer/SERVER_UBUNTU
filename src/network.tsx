@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ErrorDetails } from './diagnostics';
+import { stageLabel } from './jobs';
 type Data = Record<string, any>;
 type Api = (path: string, method?: string, body?: unknown) => Promise<any>;
 export function NetworkSettings({
@@ -17,13 +18,41 @@ export function NetworkSettings({
         [fields, setFields] = useState<Data>({ ip: '', domain: '', email: '' });
     const [password, setPassword] = useState(''),
         [code, setCode] = useState(''),
-        [busy, setBusy] = useState(false),
+        [requestBusy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null),
         [notice, setNotice] = useState('');
     const [port, setPort] = useState(project?.runtime?.port || 3000),
         [https, setHttps] = useState(true),
         [confirmed, setConfirmed] = useState(false);
+    const [networkJob, setNetworkJob] = useState<Data | null>(null);
+    const busy = requestBusy || !!networkJob;
+    useEffect(() => {
+        if (!networkJob) return;
+        let stopped = false;
+        const timer = setInterval(
+            () =>
+                void api('/jobs/' + networkJob.id + '/events')
+                    .then((data) => {
+                        if (stopped) return;
+                        if (['queued', 'running'].includes(data.job.status)) {
+                            setNetworkJob(data.job);
+                            return;
+                        }
+                        setNetworkJob(null);
+                        if (data.job.status === 'done')
+                            setNotice('הפעולה הושלמה. הכתובת ומצב התעודה עודכנו.');
+                        else setError('פעולת הפרסום נכשלה. הפירוט מופיע בפאנל המשימות.');
+                        void refresh().catch((e) => setError(e.message));
+                    })
+                    .catch(() => {}),
+            1500
+        );
+        return () => {
+            stopped = true;
+            clearInterval(timer);
+        };
+    }, [networkJob?.id]);
     async function refresh() {
         const data = await api('/network');
         setState(data);
@@ -42,6 +71,7 @@ export function NetworkSettings({
             .catch((e) => setError(e.message));
     }, [project?.id]);
     async function submit(path: string, method: string, body: Data) {
+        if (busy) return;
         setBusy(true);
         setError('');
         setNotice('');
@@ -54,12 +84,11 @@ export function NetworkSettings({
             setPassword('');
             setCode('');
             setConfirmed(false);
-            setNotice(
-                result.job
-                    ? 'הפעולה נוספה לפאנל המשימות. רעננו את המצב לאחר סיומה.'
-                    : 'ההגדרות נשמרו'
-            );
-            if (result.job) onQueued?.();
+            setNotice(result.job ? 'הפעולה מתבצעת; המצב יתעדכן כאן אוטומטית.' : 'ההגדרות נשמרו');
+            if (result.job) {
+                setNetworkJob({ id: result.job, status: 'queued', stage: 'ממתין בתור' });
+                onQueued?.();
+            }
             await refresh();
         } catch (e) {
             setError((e as Error).message);
@@ -131,16 +160,25 @@ export function NetworkSettings({
             )}
             <p>
                 הכנת פרסום:{' '}
-                {state?.prepared
-                    ? 'מוכנה'
-                    : 'נדרש sudo bash /opt/ubuntu-control/scripts/setup-publication.sh'}
+                {state?.prepared ? 'מוכנה' : 'נדרש שדרוג המערכת להכנה אוטומטית של HTTPS'}
             </p>
             <p>נגישות מרשת חיצונית: טרם אומתה. יש לבדוק גם את חומת האש של Contabo.</p>
             {!project && (
                 <>
                     <p>
-                        ניהול ציבורי: {state?.management ? 'https://' + state.domain : 'כבוי'} ·
-                        גישת Tailscale נשמרת
+                        ניהול ציבורי:{' '}
+                        {state?.management ? (
+                            <a
+                                href={'https://' + state.domain}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                {'https://' + state.domain}
+                            </a>
+                        ) : (
+                            'כבוי'
+                        )}{' '}
+                        · גישת Tailscale נשמרת
                     </p>
                     {Object.entries(state?.certificates || {}).map(([kind, value]) => (
                         <p key={kind}>
@@ -253,6 +291,11 @@ export function NetworkSettings({
                 </div>
             )}
             {notice && <p role="status">{notice}</p>}
+            {networkJob && (
+                <p role="status">
+                    {networkJob.status === 'queued' ? 'ממתין בתור' : stageLabel(networkJob.stage)}
+                </p>
+            )}
             {error && (
                 <p role="alert" className="danger-text">
                     {error}

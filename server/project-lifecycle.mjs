@@ -79,13 +79,18 @@ export function registerLifecycle({
     const enqueue = (req, res, action, args = {}) => {
         const id = req.project.id,
             user = req.session.username;
-        const job = queue.add('project:' + id, async (stage) => {
-            stage(action);
-            const record = await helper(action, { project: id, ...args }, stage);
-            if (action === 'project-purge') db.prepare('DELETE FROM projects WHERE id=?').run(id);
-            else save(record);
-            audit(db, user, action, id);
-        });
+        const job = queue.add(
+            'project:' + id,
+            async (stage) => {
+                stage(action);
+                const record = await helper(action, { project: id, ...args }, stage);
+                if (action === 'project-purge')
+                    db.prepare('DELETE FROM projects WHERE id=?').run(id);
+                else save(record);
+                audit(db, user, action, id);
+            },
+            action
+        );
         res.status(202).json({ job });
     };
     app.get('/api/projects/:project/lifecycle', async (req, res) => {
@@ -103,6 +108,15 @@ export function registerLifecycle({
     app.get('/api/projects/:project/options', async (req, res) =>
         res.json(await helper('project-options', { project: req.project.id }))
     );
+    app.get('/api/projects/:project/port-check', async (req, res) => {
+        const input = z
+            .object({
+                port: z.coerce.number().int().min(1024).max(65535),
+                listenAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
+            })
+            .parse(req.query);
+        res.json(await helper('project-port-check', { project: req.project.id, ...input }));
+    });
     app.get('/api/projects/:project/logs', async (req, res) =>
         res.json(
             await helper('project-log-history', {

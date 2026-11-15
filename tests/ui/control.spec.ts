@@ -9,6 +9,8 @@ import { openDatabase } from '../../server/db.mjs';
 import { createApp } from '../../server/app.mjs';
 import argon2 from 'argon2';
 let server: http.Server, dir: string, db: any, base: string;
+let runtimeGate: Promise<void> | null = null,
+    releaseRuntime: (() => void) | undefined;
 const rootRecords = new Map<string, any>(),
     environments = new Map<string, Record<string, string>>();
 async function expandDetails(details: Locator) {
@@ -36,7 +38,17 @@ test.beforeAll(async () => {
             host: '127.0.0.1',
             port: 3080,
         },
-        helper: async (action: string, args: any) => {
+        helper: async (action: string, args: any, progress?: (event: any) => void) => {
+            if (action === 'project-port-check')
+                return {
+                    port: args.port,
+                    status: args.port === 3001 ? 'occupied' : 'available',
+                    listeners: args.port === 3001 ? [{ process: 'other-node', pid: 4321 }] : [],
+                };
+            if (action === 'project-start' && runtimeGate) {
+                progress?.({ stage: 'npm-install', text: 'installing test dependencies' });
+                await runtimeGate;
+            }
             if (action === 'network-status')
                 return {
                     ip: '192.0.2.20',
@@ -83,7 +95,7 @@ test.beforeAll(async () => {
                 };
             if (action === 'project-options')
                 return {
-                    scripts: ['start', 'build'],
+                    scripts: ['start', 'build', 'test'],
                     entries: ['index.mjs'],
                     git: false,
                     dockerfile: false,
@@ -254,6 +266,7 @@ test.beforeAll(async () => {
     server.on('request', app);
 });
 test.afterAll(async () => {
+    releaseRuntime?.();
     await new Promise<void>((r) => server.close(() => r()));
     db.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -397,6 +410,18 @@ test('project runtime, private environment metadata, console and archive restora
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
     await expect(dialog.getByLabel('התקנת תלויות')).toHaveValue('install');
+    await expect(dialog.getByRole('combobox', { name: 'script בדיקות', exact: true })).toHaveValue(
+        ''
+    );
+    await expect(dialog.getByText('הפורט פנוי בבדיקה הנוכחית')).toBeVisible();
+    await dialog.getByLabel('פורט הפעלה').fill('3001');
+    await expect(dialog.getByText(/הפורט תפוס בידי תהליך אחר/)).toContainText('PID 4321');
+    await dialog.getByLabel('פורט הפעלה').fill('3000');
+    await expect(dialog.getByText('הפורט פנוי בבדיקה הנוכחית')).toBeVisible();
+    await dialog.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+    });
+    await expect(dialog.getByRole('button', { name: 'סגירה', exact: true })).toBeInViewport();
     await dialog.getByLabel('תיקיות נתונים נוספות').fill('data\npublic/nested/uploads');
     await dialog.getByLabel('בדיקת תקינות').selectOption('http');
     await dialog.getByLabel('התקנת תלויות').selectOption('allow-install');
@@ -408,11 +433,38 @@ test('project runtime, private environment metadata, console and archive restora
     await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'סגירת פאנל' }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await expandDetails(card.locator('.project-manage'));
+    await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
+    await dialog.getByRole('combobox', { name: 'script בדיקות', exact: true }).selectOption('test');
+    await dialog.getByRole('button', { name: 'שמירת הגדרות הפעלה' }).click();
+    await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
+    await expect(dialog.getByRole('combobox', { name: 'script בדיקות', exact: true })).toHaveValue(
+        'test'
+    );
+    await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
     expect(rootRecords.get('lifecycle-demo')?.runtime.storageDirectories).toEqual([
         'data',
         'public/nested/uploads',
     ]);
+    runtimeGate = new Promise<void>((resolve) => {
+        releaseRuntime = resolve;
+    });
+    await card.getByRole('button', { name: 'הפעלת פרויקט', exact: true }).click();
+    await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
+    await expect(card.locator('.lifecycle-actions .primary')).toBeDisabled();
+    await expect(card.locator('.lifecycle-actions .primary')).toContainText(
+        /ממתין בתור|מתקין תלויות/
+    );
+    await expect(card.getByRole('button', { name: 'קונסול הפרויקט', exact: true })).toBeEnabled();
+    await page.getByRole('button', { name: 'לוח בקרה', exact: true }).click();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await expect(card.locator('.lifecycle-actions .primary')).toBeDisabled();
+    releaseRuntime?.();
+    runtimeGate = null;
+    await expect(card.getByRole('button', { name: 'הפעלת פרויקט', exact: true })).toBeEnabled({
+        timeout: 10000,
+    });
     await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
         'href',
         'http://192.0.2.20:3000/'
@@ -496,6 +548,8 @@ test('project runtime, private environment metadata, console and archive restora
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
     await expect(card.getByText(/שירות: כבוי/)).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await expect(page.locator('main > header')).toBeInViewport();
     expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
     ).toBeTruthy();

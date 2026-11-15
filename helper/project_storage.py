@@ -225,6 +225,19 @@ def migrate_shared(source,target,state_dir,identifier):
     atomic_private(marker,json.dumps(result))
     return result
 
+
+def systemd_state_path(normal,expected):
+    """Resolve only PID1's root-owned link to this exact private state directory.
+
+    Descriptor-anchored copy still rejects every symlink in the returned path.
+    Do not pass the public alias to directory(), which intentionally uses NOFOLLOW.
+    """
+    if normal.is_symlink():
+        if normal.lstat().st_uid!=0 or normal.resolve()!=expected:
+            raise ValueError('Untrusted systemd private state link')
+        return expected
+    return normal
+
 def storage_child(store,relative):
     with directory(store) as parent:
         fd=os.dup(parent)
@@ -250,11 +263,7 @@ class Storage:
     def state_name(self,path):return 'ubuntu-control-storage/'+self.key+'-'+hashlib.sha256(path.encode()).hexdigest()[:20]
     def state_path(self,path):
         name=self.state_name(path).split('/',1)[1];normal=self.base/name
-        if normal.is_symlink():
-            expected=pathlib.Path('/var/lib/private/ubuntu-control-storage')/name
-            if normal.lstat().st_uid!=0 or normal.resolve()!=expected:raise ValueError('Untrusted storage state link')
-            return expected
-        return normal
+        return systemd_state_path(normal,pathlib.Path('/var/lib/private/ubuntu-control-storage')/name)
     def prepare(self,p):
         root=pathlib.Path(p['root']);release=root/'.control-releases'/p['release']
         if not re.fullmatch(r'\d+-[a-f0-9]{10}',p['release']) or release.is_symlink():raise ValueError('Invalid storage release')

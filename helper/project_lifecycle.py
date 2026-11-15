@@ -14,7 +14,7 @@ import stat
 from diagnostics import OperationError,clean,redact
 from project_secrets import atomic_private,read_values,patch_values
 from job_progress import emit
-from project_storage import Storage,validate_directories,migrate_shared
+from project_storage import Storage,validate_directories,migrate_shared,systemd_state_path
 
 REGISTRY_LOCK=threading.RLock()
 BUILD_LOCK=threading.Lock()
@@ -229,9 +229,9 @@ class Lifecycle:
             state_base=pathlib.Path('/var/lib/ubuntu-control-projects');state_base.mkdir(mode=0o755,exist_ok=True)
             if state_base.is_symlink():raise ValueError('Unsafe project state base')
             state_base.chmod(0o755)
-            data=pathlib.Path('/var/lib')/n['state'];data.mkdir(mode=0o700,parents=True,exist_ok=True)
             # systemd may replace this with its own root-owned private-state symlink.
-            if data.is_symlink() and (data.lstat().st_uid!=0 or data.resolve()!=pathlib.Path('/var/lib/private')/n['state']):raise ValueError('Unsafe private state link')
+            data=systemd_state_path(pathlib.Path('/var/lib')/n['state'],pathlib.Path('/var/lib/private')/n['state'])
+            data.mkdir(mode=0o700,parents=True,exist_ok=True)
             shared=pathlib.Path(p['root'])/'shared'
             if shared.is_symlink():raise ValueError('Symlink persistent-data paths are prohibited')
             shared.mkdir(mode=0o700,exist_ok=True)

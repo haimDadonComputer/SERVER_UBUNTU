@@ -1,7 +1,7 @@
 import copy,json,os,pathlib,stat,sys,tempfile,unittest
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'helper'))
-from project_storage import Storage,configuration,configured_paths,discover,relative_path,copy_tree,directory,migrate_shared
+from project_storage import Storage,configuration,configured_paths,discover,relative_path,copy_tree,directory,migrate_shared,systemd_state_path
 from project_lifecycle import Lifecycle,validate_runtime
 from runtime_launcher import node_options
 
@@ -36,6 +36,17 @@ class StorageDiscoveryTests(unittest.TestCase):
         (release/'data').write_text('application code')
         self.assertNotIn('data',configured_paths(self.root,release,[]))
         self.assertIn('custom/cache',configured_paths(self.root,release,['custom/cache']))
+    def test_systemd_state_alias_returns_private_target_not_the_symlink(self):
+        normal=Mock();expected=self.root/'private/state'
+        normal.is_symlink.return_value=True;normal.lstat.return_value=Mock(st_uid=0)
+        normal.resolve.return_value=expected
+        self.assertEqual(systemd_state_path(normal,expected),expected)
+        normal.resolve.return_value=self.root/'other-project'
+        with self.assertRaises(ValueError):systemd_state_path(normal,expected)
+        normal.resolve.return_value=expected;normal.lstat.return_value=Mock(st_uid=997)
+        with self.assertRaises(ValueError):systemd_state_path(normal,expected)
+        normal.is_symlink.return_value=False
+        self.assertIs(systemd_state_path(normal,expected),normal)
     def test_runtime_validation_and_module_policy_options(self):
         value=validate_runtime({'kind':'node','mode':'entry','entry':'index.mjs','health':'process','storageDirectories':['data']},{'entries':['index.mjs']})
         self.assertEqual(value['storageDirectories'],['data'])
@@ -88,6 +99,21 @@ class StorageCopyTests(unittest.TestCase):
         (self.target/'new').unlink()
         self.assertEqual(migrate_shared(self.source,self.target,self.base/'state','demo'),result)
         self.assertFalse((self.target/'new').exists(),'Restart must not resurrect deleted application data')
+    def test_shared_migration_uses_verified_private_state_after_systemd_migration(self):
+        self.target.mkdir();alias=self.base/'public-state';alias.symlink_to(self.target,target_is_directory=True)
+        (self.source/'new').write_text('retained original')
+        # Emulate PID1's root ownership while allowing the upgrade suite to run
+        # unprivileged. Path traversal/copy uses actual POSIX descriptors.
+        original=pathlib.Path.lstat
+        def lstat(path,*args,**kwargs):
+            return Mock(st_uid=0,st_mode=stat.S_IFLNK) if path==alias else original(path,*args,**kwargs)
+        with patch.object(pathlib.Path,'lstat',lstat):
+            target=systemd_state_path(alias,self.target)
+        with self.assertRaises(OSError):
+            with directory(alias):pass
+        migrate_shared(self.source,target,self.base/'state','demo')
+        self.assertEqual((self.target/'new').read_text(),'retained original')
+        self.assertTrue(alias.is_symlink());self.assertEqual((self.source/'new').read_text(),'retained original')
     def test_failed_shared_backup_does_not_mutate_private_data(self):
         self.target.mkdir();(self.source/'secret-link').symlink_to('/etc')
         with self.assertRaises(ValueError):migrate_shared(self.source,self.target,self.base/'state','demo')

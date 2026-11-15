@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 const forbidden =
-    /(^|\/)(?:\..*|node_modules|current|shared|data|secrets?|credentials?|id_rsa.*|id_ed25519.*|.*\.(?:pem|key|p12|sqlite|db)|.*(?:token|password|secret).*|.*\.env.*)(\/|$)/i;
+    /(^|\/)(?:\..*|node_modules|current|shared|data|uploads?|secrets?|credentials?|id_rsa.*|id_ed25519.*|.*\.(?:pem|key|p12|sqlite|db)|.*(?:token|password|secret).*|.*\.env.*)(\/|$)/i;
 export function safeRelative(input) {
     if (
         typeof input !== 'string' ||

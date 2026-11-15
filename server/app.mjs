@@ -403,6 +403,18 @@ export async function createApp({ db, config, helper }) {
         if (!p) return res.status(404).json({ error: 'הפרויקט לא נמצא' });
         req.project = p;
         const view = projectView(p);
+        const relative = String(req.query.path || req.body?.path || '');
+        if (
+            /\/(?:files|file|directory|download)\/?$/.test(req.path) &&
+            (view.writableDirectories || []).some(
+                (dir) => relative === dir || relative.startsWith(dir + '/')
+            )
+        )
+            return res
+                .status(403)
+                .json({
+                    error: 'תיקיית נתונים מוגנת; ניהול קבצי מקור אינו מאפשר גישה לנתוני היישום',
+                });
         if (
             view.lifecycle !== 'active' &&
             /^\/api\/projects\/[^/]+\/(?:files|file|directory|download|git|preview|clone|deploy|pull|env)\/?$/.test(

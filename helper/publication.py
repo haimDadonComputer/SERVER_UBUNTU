@@ -9,6 +9,7 @@ import socket
 import threading
 from project_secrets import atomic_private
 from project_lifecycle import Lifecycle, project_lock, BUILD_LOCK, REGISTRY_LOCK, PROJECT_LOCKS
+from project_storage import Storage
 from job_progress import emit
 from diagnostics import OperationError
 
@@ -145,15 +146,26 @@ class Publication:
             latest=self.read();latest['certificates'][kind]={'status':'failed','checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()};self.save(latest);raise
         if not staging:
             data['certificates'][kind]={'status':'issued','checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    def proxy(self,data,port,upstream,tls,management=False):
+    def proxy(self,data,port,upstream,tls,management=False,storage=()):
         name=data['domain'] if management else data['ip']
         lines=['server {',' listen '+data['ip']+':'+str(port)+(' ssl' if tls else '')+';',' server_name '+name+';']
         if tls:
             cert=self.cert_path('management' if management else 'ip')
             lines+=[' ssl_certificate '+str(cert/'fullchain.pem')+';',' ssl_certificate_key '+str(cert/'privkey.pem')+';',' ssl_protocols TLSv1.2 TLSv1.3;']
         if management:lines+=[' if ($host != '+name+') { return 444; }']
+        if not management:
+            lines+=[' location ~* '+json.dumps(r'(^|/)(uploads?|shared|\.control-releases)(/|$)')+' { return 404; }']
+            for path in storage:lines+=[' location ~* '+json.dumps('^/'+re.escape(path)+'(?:/|$)',ensure_ascii=False)+' { return 404; }']
         lines+=[' location / {',' proxy_pass http://127.0.0.1:'+str(upstream)+';',' proxy_http_version 1.1;',' proxy_set_header Host $host;',' proxy_set_header X-Forwarded-Proto $scheme;',' proxy_set_header X-Forwarded-For $remote_addr;',' proxy_set_header Upgrade $http_upgrade;',' proxy_set_header Connection "upgrade";',' proxy_read_timeout 3600s;',' }','}']
         return '\n'.join(lines)+'\n'
+    def refresh_storage(self,identifier,p):
+        with NETWORK_LOCK:
+            before=self.read()
+            if identifier not in before['projects']:return
+            paths=sorted(set([*p.get('writableDirectories',[]),*Storage(Lifecycle(self.cfg,self.h),identifier).catalog()['paths']]))
+            after=copy.deepcopy(before);item=after['projects'][identifier];item['storageDirectories']=paths
+            name='project-'+Lifecycle(self.cfg,self.h).names(identifier)['key']+'.conf'
+            self.transaction(before,after,{name:self.proxy(after,item['port'],item['upstream'],item['https'],storage=paths)})
     def publish(self,identifier,args):
         before=self.read();data=copy.deepcopy(before)
         if args.get('confirmed') is not True:raise ValueError('Explicit publication confirmation required')
@@ -232,7 +244,7 @@ class Publication:
         if management:data['management']=True
         else:data['projects'][identifier]={'enabled':True,'port':port,'https':tls,'upstream':upstream,'url':('https' if tls else 'http')+'://'+data['ip']+':'+str(port)+'/','externalReachability':'unverified'}
         data.pop('challengePending',None)
-        try:self.transaction(before,data,{name:self.proxy(data,port,upstream,tls,management)})
+        try:self.transaction(before,data,{name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]))})
         except Exception:
             if not challenge_ready and not (self.state/'pending.json').exists():self.clear_bootstrap()
             raise

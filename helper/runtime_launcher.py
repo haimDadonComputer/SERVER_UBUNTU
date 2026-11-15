@@ -8,8 +8,15 @@ import signal
 import subprocess
 import sys
 import threading
+import shlex
 from diagnostics import redact
 from project_secrets import read_values
+
+def node_options(value,guard):
+    flags=shlex.split(value)
+    allowed=r'--(?:(?:max-old-space-size|max-semi-space-size|stack-trace-limit)=\d{1,8}|enable-source-maps|trace-warnings|no-warnings|unhandled-rejections=(?:strict|throw|warn|none))'
+    if any(not re.fullmatch(allowed,flag) for flag in flags):raise ValueError('Unsupported NODE_OPTIONS with managed storage; use only memory/diagnostic options, not custom loaders')
+    return '--require='+guard+(' '+' '.join(flags) if flags else '')
 
 def launch():
     credentials=pathlib.Path(os.environ['CREDENTIALS_DIRECTORY'])
@@ -28,6 +35,10 @@ def launch():
         env.pop('CREDENTIALS_DIRECTORY',None)
         if os.environ.get('STATE_DIRECTORY'):env['HOME']=os.environ['STATE_DIRECTORY'].split(':')[0]
         env.update(HOST=runtime.get('listenAddress','127.0.0.1'),PORT=str(runtime.get('port') or 3000),WWEBJS_DATA_PATH=str(root/'shared/whatsapp'),NODE_ENV=values.get('NODE_ENV','production'))
+        if config.get('storage',{}).get('version'):
+            roots=[str(root/'shared'),*[path for path in os.environ.get('STATE_DIRECTORY','').split(':') if path]]
+            for entry in config['storage']['directories']:roots.extend((str(root/entry['path']),str(release/entry['path']),entry['source']))
+            env['UC_STORAGE_ROOTS']=json.dumps(roots);env['NODE_OPTIONS']=node_options(values.get('NODE_OPTIONS',''),'/opt/ubuntu-control/helper/storage_guard.cjs')
         stdin=None
     else:
         uid=os.getuid();env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':os.environ['HOME'],'DOCKER_HOST':f'unix:///run/user/{uid}/docker.sock','XDG_RUNTIME_DIR':f'/run/user/{uid}'}

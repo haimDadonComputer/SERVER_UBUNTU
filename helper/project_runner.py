@@ -4,6 +4,7 @@ import os, sys, json, subprocess, pathlib, re, time,shutil,hashlib
 from git_credentials import credentials
 from diagnostics import failure,exception_details,serialize,OperationError
 from job_progress import PREFIX
+from project_storage import discover,configuration,MANIFEST
 
 GITHUB_TOKEN=None
 BUILD_ENV={}
@@ -80,7 +81,8 @@ def status(root):
     if os.environ.get('UC_EXPECTED_REPO') and remote!=os.environ['UC_EXPECTED_REPO']: raise ValueError('Repository differs from the authorized configuration')
     if os.environ.get('UC_EXPECTED_BRANCH') and branch!=os.environ['UC_EXPECTED_BRANCH']: raise ValueError('Branch differs from the authorized configuration')
     current=git(root,'rev-parse','HEAD')
-    dirty=bool(git(root,'status','--porcelain','--','.',':(exclude)current',':(exclude).control*',':(exclude)shared'))
+    storage=discover(root,configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
+    dirty=bool(git(root,'status','--porcelain','--','.',':(exclude)current',':(exclude).control*',':(exclude)shared',*[':(exclude)'+path for path in storage]))
     upstream=git(root,'for-each-ref','--format=%(objectname)','refs/remotes/origin/'+branch)
     return {'repo':remote,'branch':branch,'commit':current,'dirty':dirty,'remoteCommit':upstream or None,'remoteChecked':False}
 
@@ -124,10 +126,12 @@ def snapshot(root):
     releases=root/'.control-releases';releases.mkdir(exist_ok=True)
     staging=releases/('snapshot-'+str(time.time_ns()));staging.mkdir()
     digest=hashlib.sha256()
+    storage=discover(root,configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
     def copy(directory,relative=pathlib.Path()):
         for entry in sorted(directory.iterdir()):
-            if entry.name.startswith('.') or entry.name in ('node_modules','shared','current','data','secrets','credentials') or entry.is_symlink() or entry.suffix.lower() in ('.env','.pem','.key','.sqlite','.db'):continue
+            if entry.name.startswith('.') and entry.name!=MANIFEST or entry.name in ('node_modules','shared','current','data','secrets','credentials') or entry.is_symlink() or entry.suffix.lower() in ('.env','.pem','.key','.sqlite','.db'):continue
             rel=relative/entry.name;dest=staging/rel
+            if rel.as_posix() in storage:dest.mkdir(exist_ok=True);continue
             if entry.is_dir():dest.mkdir();copy(entry,rel)
             elif entry.is_file():
                 shutil.copy2(entry,dest);digest.update(str(rel).encode());digest.update(dest.read_bytes())

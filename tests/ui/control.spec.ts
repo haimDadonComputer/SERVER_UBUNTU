@@ -397,6 +397,7 @@ test('project runtime, private environment metadata, console and archive restora
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
     await expect(dialog.getByLabel('התקנת תלויות')).toHaveValue('install');
+    await dialog.getByLabel('תיקיות נתונים נוספות').fill('data\npublic/nested/uploads');
     await dialog.getByLabel('בדיקת תקינות').selectOption('http');
     await dialog.getByLabel('התקנת תלויות').selectOption('allow-install');
     await dialog.getByRole('checkbox', { name: 'גישה דרך IP ופורט של השרת' }).check();
@@ -408,6 +409,10 @@ test('project runtime, private environment metadata, console and archive restora
     await page.getByRole('button', { name: 'סגירת פאנל' }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
+    expect(rootRecords.get('lifecycle-demo')?.runtime.storageDirectories).toEqual([
+        'data',
+        'public/nested/uploads',
+    ]);
     await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
         'href',
         'http://192.0.2.20:3000/'

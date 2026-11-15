@@ -42,6 +42,7 @@ const runtime = z.object({
     listenAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
     internalPort: z.number().int().min(1).max(65535).optional(),
     dataPath: z.string().max(200).optional(),
+    storageDirectories: z.array(z.string().min(1).max(400)).max(64).default([]),
 });
 export function registerLifecycle({
     app,

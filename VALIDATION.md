@@ -1,5 +1,13 @@
 # Verification record — 2026-11-14
 
+## Scoped persistent upload/data storage for Node — 2026-11-15
+
+Node-only change; Docker launcher behavior was retained as requested. Added automatic nested upload/uploads discovery, explicit additional data directories in runtime and versioned project configuration, stable private StateDirectory mappings, read-only root-owned runtime projections, noexec and ordinary CJS/ESM load restrictions. Data migration preserves originals and rejects conflicts/links; updates/rollback retain the catalog and persistent stores. Managed proxy and source-file API block direct storage access. Upgrade prepares root directories and defers adoption until explicit activation; acceptance-runtime.py now tests nested storage, missing data, code immutability, noexec, module denial and data preservation.
+
+Local checks: 25 Node tests passed; 111 Python tests ran, 101 passed and 10 POSIX/root/systemd checks skipped on Windows. Production build and focused project lifecycle UI test passed, including the additional-data field and existing environment/console/archive flows. Bash upgrade syntax and diff whitespace checks passed. No screenshots were used.
+
+No Ubuntu/Contabo integration was run here. Descriptor-anchored copying, real DynamicUser ownership/bind/noexec behavior and reboot recovery require the updated Ubuntu acceptance test and operator verification. Loader/proxy policy does not sandbox malicious app code or authenticate custom download routes; that limit is documented explicitly in INSTALL.md.
+
 ## Content organization and responsive styling — 2026-11-15
 
 Preserved the application header/sidebar and reorganized content: project summaries and status filters, primary actions versus native expandable management/Git/release sections, topic-based settings, filtered jobs and readable event timelines. Network forms, cards and tables share content-only spacing and responsive rules. Existing pending DNS diagnostic changes were preserved.

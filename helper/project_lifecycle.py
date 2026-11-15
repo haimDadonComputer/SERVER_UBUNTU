@@ -14,6 +14,7 @@ import stat
 from diagnostics import OperationError,clean,redact
 from project_secrets import atomic_private,read_values,patch_values
 from job_progress import emit
+from project_storage import Storage,validate_directories
 
 REGISTRY_LOCK=threading.RLock()
 BUILD_LOCK=threading.Lock()
@@ -49,6 +50,7 @@ def validate_runtime(value,options):
     listen=value.get('listenAddress','127.0.0.1')
     if listen not in ('127.0.0.1','0.0.0.0'):raise ValueError('Invalid listen address')
     result['listenAddress']=listen
+    result['storageDirectories']=validate_directories(value.get('storageDirectories',[]))
     for field in ('testScript','buildScript'):
         if result[field] and result[field] not in options.get('scripts',[]):raise ValueError('Select an existing package.json script')
     if kind=='node':
@@ -96,7 +98,7 @@ class Lifecycle:
             registry=self.h['read_project_registry'](self.cfg);registry[identifier]=p;self.h['write_project_registry'](self.cfg,registry)
         return self.public(identifier,p)
     def public(self,identifier,p):
-        keys=('root','service','kind','repo','branch','auth','github_repository_id','health_port','runtime','ownership','lifecycle','desired','updates','remoteCommit','preparedCommit','activeCommit','failedCommit','checkedAt','deployedAt','deployment','archivedAt')
+        keys=('root','service','kind','repo','branch','auth','github_repository_id','health_port','runtime','ownership','lifecycle','desired','updates','remoteCommit','preparedCommit','activeCommit','failedCommit','checkedAt','deployedAt','deployment','archivedAt','writableDirectories')
         pending=self.transaction_path(identifier).exists()
         if pending:
             try:pending=json.loads(self.transaction_path(identifier).read_text()).get('id')!=p.get('operationId')
@@ -200,7 +202,16 @@ class Lifecycle:
         lines=['[Unit]','Description=Ubuntu Control project '+identifier,'After=network-online.target ubuntu-control-helper.service','Wants=ubuntu-control-helper.service','[Service]','Type=simple','WorkingDirectory='+scalar(pathlib.Path(p['root'])/'current'),'ExecStart=/usr/bin/python3 /opt/ubuntu-control/helper/runtime_launcher.py','LoadCredential=launch:'+scalar(launch),'LoadCredential=environment:'+scalar(env),'Restart=on-failure','RestartSec=5','KillMode=control-group','UMask=0077','NoNewPrivileges=true','ProtectSystem=strict','ProtectHome=true','PrivateTmp=true','ProtectKernelTunables=true','ProtectKernelModules=true','ProtectControlGroups=true','RestrictSUIDSGID=true','LimitCORE=0','ReadOnlyPaths='+q(p['root']),'InaccessiblePaths=-/etc/ubuntu-control -/var/lib/ubuntu-control -/var/lib/ubuntu-control-helper -/var/lib/ubuntu-control-github']
         # BindPaths splits source:destination while unquoting each component.
         # Quoting the whole pair hides the separator and makes it one source path.
-        if r['kind']=='node':lines+=['DynamicUser=true','User=ucp-'+n['key'],'SupplementaryGroups=ubuntu-projects','StateDirectory='+n['state'],'StateDirectoryMode=0700','BindPaths='+q('/var/lib/'+n['state'])+':'+q(p['root']+'/shared'),'ReadWritePaths='+q(p['root']+'/shared'),'InaccessiblePaths=-/var/lib/ubuntu-projects -/var/lib/ubuntu-docker']
+        if r['kind']=='node':
+            lines+=['DynamicUser=true','User=ucp-'+n['key'],'SupplementaryGroups=ubuntu-projects','StateDirectory='+n['state'],'StateDirectoryMode=0700','BindPaths='+q('/var/lib/'+n['state'])+':'+q(p['root']+'/shared'),'ReadWritePaths='+q(p['root']+'/shared'),'InaccessiblePaths=-/var/lib/ubuntu-projects -/var/lib/ubuntu-docker']
+            storage=p.get('storage',{})
+            if storage.get('view'):
+                lines+=['BindReadOnlyPaths='+q(storage['view'])+':'+q(p['root']),'NoExecPaths='+q(p['root']+'/shared'),'NoExecPaths='+q('/var/lib/'+n['state'])]
+                for state_name in sorted(set(entry['state'] for entry in storage['directories'])):lines+=['StateDirectory='+state_name]
+                for entry in storage['directories']:
+                    for target in (p['root']+'/'+entry['path'],p['root']+'/.control-releases/'+p['release']+'/'+entry['path']):
+                        lines+=['BindPaths='+q(entry['source'])+':'+q(target),'ReadWritePaths='+q(target),'NoExecPaths='+q(target)]
+                    lines+=['NoExecPaths='+q(entry['source'])]
         else:
             import pwd
             docker_uid=pwd.getpwnam('ubuntu-docker').pw_uid
@@ -212,7 +223,6 @@ class Lifecycle:
         if not env.exists():atomic_private(env,'')
         payload={'id':identifier,'root':p['root'],'runtime':p['runtime'],'publicBuild':p.get('publicBuild',[]),**{k:n[k] for k in ('container','volume')}}
         if p.get('image'):payload['image']=p['image']
-        atomic_private(env.with_suffix('.runtime.json'),json.dumps(payload))
         if p['runtime']['kind']=='node':
             if any(line.split(':',1)[0]=='ucp-'+n['key'] for line in pathlib.Path('/etc/passwd').read_text().splitlines()):raise ValueError('Managed DynamicUser identity conflicts with a static system account')
             # Only root-owned StateDirectory paths are used; persistent data stays outside releases.
@@ -242,6 +252,19 @@ class Lifecycle:
             if not any('rootless' in str(x) for x in info):raise ValueError('Docker engine must be rootless')
             self.docker(['volume','create','--label','ubuntu-control.project='+identifier,n['volume']])
             if self.docker(['volume','inspect','--format','{{index .Labels "ubuntu-control.project"}}',n['volume']]).strip()!=identifier:raise ValueError('Docker volume is not owned by this project')
+        live=self.state(p).get('active')=='active'
+        if not live and p['runtime']['kind']=='node':
+            try:
+                with BUILD_LOCK:p['storage']=Storage(self,identifier).prepare(p)
+            except (ValueError,OSError) as error:
+                if isinstance(error,OperationError):raise
+                raise OperationError('הכנת תיקיות הנתונים נכשלה',{'code':'STORAGE_PREPARATION_FAILED','stage':'storage-prepare','stderr':str(error),'hint':'בדקו את רשימת תיקיות הנתונים ואת נתיבי ההעלאה. Symlinks, hardlinks ונתונים סותרים נחסמים ללא מחיקת המקור; אין לפתוח הרשאות לכל גרסת הקוד.'}) from None
+            p['writableDirectories']=[entry['path'] for entry in p['storage']['directories']]
+        if p.get('storage'):payload['storage']=p['storage']
+        atomic_private(env.with_suffix('.runtime.json'),json.dumps(payload))
+        if p['runtime']['kind']=='node':
+            from publication import Publication
+            Publication(self.cfg,self.h).refresh_storage(identifier,p)
         unit_dir=pathlib.Path(self.cfg.get('unit_dir','/run/systemd/system'))
         atomic_private(unit_dir/n['unit'],self.unit_text(identifier,p));(unit_dir/n['unit']).chmod(0o644)
         self.h['run'](['/usr/bin/systemctl','daemon-reload'])
@@ -308,6 +331,7 @@ class Lifecycle:
         try:
             if start and p.get('release') and not p.get('runtimePending') and not args.get('rebuild'):pass
             else:result=self.release(identifier,p,args.get('expected'))
+            if old.get('release') and self.state(old).get('active')=='active':self.h['run'](['/usr/bin/systemctl','stop',self.names(identifier)['unit']],timeout=45)
             self.provision(identifier,p)
             if start or was_running:
                 emit('starting')
@@ -357,6 +381,7 @@ class Lifecycle:
         if not p.get('release'):raise ValueError('No prepared release is available')
         self.begin(identifier,old,'deploy')
         try:
+            if self.state(old).get('active')=='active':self.h['run'](['/usr/bin/systemctl','stop',self.names(identifier)['unit']],timeout=45)
             result=json.loads(self.h['project_run'](self.cfg,p,['rollback',release],120))
             if not result.get('restored'):raise ValueError('No previous release is available')
             p.update(release=result['release'],preparedCommit=result['commit'])
@@ -504,6 +529,7 @@ class Lifecycle:
             tags=self.docker(['image','ls','--filter','label=ubuntu-control.project='+identifier,'--format','{{.Repository}}:{{.Tag}}']).splitlines()
             for tag in set(tags):
                 if re.fullmatch(r'uc-project-'+n['key']+r':[0-9]+-[a-f0-9]{10}',tag):self.docker(['image','rm',tag])
+        if p.get('runtime',{}).get('kind')=='node':Storage(self,identifier).purge()
         for path in paths:
             if not path.exists():continue
             with contextlib.ExitStack() as stack:
@@ -616,7 +642,10 @@ def rehydrate(cfg,backend):
                 if life.transaction_path(identifier).exists():continue
                 p=life.lookup(identifier)
                 if p.get('ownership')!='managed' or not p.get('release'):continue
+                # A web/helper upgrade must not replace a running unit's namespace.
+                if p.get('desired')=='running' and not new_boot:continue
                 life.provision(identifier,p)
+                if p.get('storage'):life.save(identifier,p)
                 if new_boot and p['runtime']['autostart']:
                     backend['run'](['/usr/bin/systemctl','start',life.names(identifier)['unit']]);p['desired']='running';life.save(identifier,p)
         except Exception:

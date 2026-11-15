@@ -5,6 +5,11 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_proxy_blocks_storage_paths_but_keeps_management_upload_api_available(self):
+        text=self.pub.proxy(self.pub.read(),3000,3000,False,storage=['data','runtime/cache'])
+        self.assertIn('uploads?',text);self.assertIn('^/data(?:/|$)',text);self.assertIn('^/runtime/cache(?:/|$)',text)
+        management=self.pub.proxy(self.pub.read(),443,3080,True,True)
+        self.assertNotIn('uploads?',management)
     def test_management_dns_failures_are_actionable_and_do_not_modify_publication(self):
         import socket
         from diagnostics import OperationError

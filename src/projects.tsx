@@ -722,6 +722,37 @@ function RuntimeEditor({
                             <option value="process">תהליך יציב במשך 20 שניות</option>
                         </select>
                     </label>
+                    {runtime.kind === 'node' && (
+                        <>
+                            <label>
+                                תיקיות נתונים נוספות (נתיב יחסי בכל שורה)
+                                <textarea
+                                    aria-label="תיקיות נתונים נוספות"
+                                    placeholder={'data\nruntime/cache'}
+                                    value={(runtime.storageDirectories || []).join('\n')}
+                                    onChange={(e) =>
+                                        set(
+                                            'storageDirectories',
+                                            e.target.value
+                                                .split('\n')
+                                                .map((path) => path.trim())
+                                                .filter(Boolean)
+                                        )
+                                    }
+                                />
+                            </label>
+                            <p className="muted">
+                                תיקיות upload ו־uploads מזוהות אוטומטית בכל עומק. תיקיות נוספות כגון
+                                data נוצרות וממופות רק לאחר הגדרה מפורשת, ונשמרות גם בעדכון ובשחזור.
+                                הנתיבים חסומים לפרסום ישיר.
+                            </p>
+                            {(p.writableDirectories || []).length > 0 && (
+                                <p className="muted">
+                                    מיפויים פעילים: {p.writableDirectories.join(', ')}
+                                </p>
+                            )}
+                        </>
+                    )}
                     <label>
                         פורט בשרת
                         <input

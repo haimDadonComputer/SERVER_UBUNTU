@@ -82,6 +82,8 @@ test('reject traversal and protected runtime/secrets paths', () => {
         'secret.txt',
         'node_modules/x',
         'current/index.js',
+        'public/UpLoAds/private.txt',
+        'assets/upload/image.png',
     ])
         assert.throws(() => safeRelative(value), value);
     assert.equal(safeRelative('src/index.ts'), 'src/index.ts');

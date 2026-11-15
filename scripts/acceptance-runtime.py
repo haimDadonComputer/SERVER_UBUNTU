@@ -6,7 +6,7 @@ No existing web users, database, settings, firewall or projects are modified.
 """
 import argparse,json,os,pathlib,re,shutil,socket,sys,tempfile,urllib.request,uuid
 
-REQUIRED_HELPER_FILES=('helper.py','project_lifecycle.py','project_logs.py','project_secrets.py','runtime_launcher.py','project_runner.py')
+REQUIRED_HELPER_FILES=('helper.py','project_lifecycle.py','project_logs.py','project_secrets.py','runtime_launcher.py','project_runner.py','project_storage.py','storage_guard.cjs')
 
 def installed_helper_directory(directory=pathlib.Path('/opt/ubuntu-control/helper')):
     missing=[name for name in REQUIRED_HELPER_FILES if not (directory/name).is_file()]
@@ -66,9 +66,18 @@ def main():
     life=Lifecycle(cfg,vars(backend));created=False;failure=None;cleanup_error=None;secret=None;stage='prepare'
     with socket.socket() as probe:probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
     account=pwd.getpwnam('ubuntu-projects')
-    source='''import http from 'node:http';import fs from 'node:fs';
+    source='''import http from 'node:http';import fs from 'node:fs';import {spawnSync} from 'node:child_process';import {pathToFileURL} from 'node:url';
 const file=process.env.DATA_PATH||process.env.WWEBJS_DATA_PATH+'/../counter';
-http.createServer((req,res)=>{if(req.url==='/touch'){fs.mkdirSync(file.substring(0,file.lastIndexOf('/')),{recursive:true});fs.writeFileSync(file,'retained');}
+const stores=fs.existsSync('public/nested/Uploads')?['public/nested/Uploads','assets/Upload','data']:[];
+for(const directory of stores)fs.mkdirSync(directory,{recursive:true});
+http.createServer(async(req,res)=>{if(req.url==='/touch'){fs.mkdirSync(file.substring(0,file.lastIndexOf('/')),{recursive:true});fs.writeFileSync(file,'retained');for(const directory of stores)fs.writeFileSync(directory+'/persisted','retained');}
+if(req.url==='/storage-probe'){
+let codeReadOnly=false,moduleBlocked=false;try{fs.writeFileSync('index.mjs','unexpected')}catch(error){codeReadOnly=['EROFS','EACCES','EPERM'].includes(error.code)}
+fs.copyFileSync('/bin/true','public/nested/Uploads/native');fs.chmodSync('public/nested/Uploads/native',0o755);
+const native=spawnSync('./public/nested/Uploads/native');
+fs.writeFileSync('public/nested/Uploads/uploaded.mjs','throw Error("uploaded code executed")');
+try{await import(pathToFileURL(process.cwd()+'/public/nested/Uploads/uploaded.mjs'))}catch(error){moduleBlocked=error.code==='UC_STORAGE_CODE_BLOCKED'}
+res.end(JSON.stringify({codeReadOnly,moduleBlocked,nativeBlocked:native.error?.code==='EACCES',retained:stores.every(directory=>fs.readFileSync(directory+'/persisted','utf8')==='retained')}));return;}
 if(req.url==='/secret')console.error(process.env.API_KEY);
 res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSync(file,'utf8'):null}));}).listen(Number(process.env.PORT),'BIND');
 '''
@@ -80,6 +89,10 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
     try:
         project=backend.create_project(cfg,{'id':identifier});created=True;version('one')
         runtime={'kind':'docker' if args.docker else 'node','mode':'entry','entry':'index.mjs','args':[],'health':'http','port':port,'healthPath':'/','autostart':False}
+        if not args.docker:
+            for relative in ('public','public/nested','public/nested/Uploads'):
+                directory=pathlib.Path(project['root'])/relative;directory.mkdir(exist_ok=True);os.chown(directory,account.pw_uid,account.pw_gid);directory.chmod(0o750)
+            runtime['storageDirectories']=['data','assets/Upload']
         secret='acceptance-private-'+uuid.uuid4().hex
         if args.docker:
             runtime.update(internalPort=3000,dataPath='/app/shared')
@@ -88,6 +101,8 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
         stage='initial-start';life.control(identifier,'start');assert get()['version']=='one';get('/touch');get('/secret')
         stage='restart'
         life.control(identifier,'restart');assert get()['data']=='retained'
+        if not args.docker:
+            stage='storage-sandbox';assert all(get('/storage-probe').values())
         stage='update';version('two');life.deploy(identifier,{});assert get()['version']=='two';assert get()['data']=='retained'
         stage='rollback'
         write('index.mjs','process.exit(1)')
@@ -95,6 +110,7 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
         except OperationError:pass
         else:raise AssertionError('Broken runtime was reported healthy')
         assert get()['version']=='two';assert get()['data']=='retained'
+        if not args.docker:assert all(get('/storage-probe').values())
         stage='journal';records=ProjectLogHub(cfg,vars(backend)).history(identifier);assert secret not in json.dumps(records)
         stage='stopped-update'
         life.control(identifier,'stop');version('three');life.deploy(identifier,{})
@@ -103,6 +119,7 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
         assert life.lookup(identifier)['updates']=='manual';assert life.lookup(identifier)['desired']=='stopped'
         assert read_values(life.env_path(identifier))['API_KEY']==secret
         stage='restored-start';life.control(identifier,'start');assert get()['version']=='three';assert get()['data']=='retained'
+        if not args.docker:assert all(get('/storage-probe').values())
     except Exception as error:
         failure=error;report_failure(error,stage,state,identifier,(secret,))
     finally:

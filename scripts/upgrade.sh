@@ -116,6 +116,10 @@ for unit in /run/systemd/system/uc-project-*.service; do
 done
 install -d -m 0700 -o root -g root /etc/ubuntu-control/projects
 install -d -m 0755 -o root -g root /var/lib/ubuntu-control-projects
+for storage_root in /var/lib/ubuntu-control-code /var/lib/ubuntu-control-storage; do
+  [[ ! -L $storage_root ]] || { echo "Unsafe storage root: $storage_root"; false; }
+  install -d -m 0755 -o root -g root "$storage_root"
+done
 if [[ -d /var/lib/ubuntu-control-github ]]; then cp -a /var/lib/ubuntu-control-github "$BACKUP_DIR/github-state"; fi
 python3 - "$DATA_DIR/control.sqlite" "$BACKUP_DIR/control.sqlite" <<'PY'
 import pathlib,sqlite3,sys
@@ -143,6 +147,7 @@ for i in {1..20}; do
     echo "Upgrade complete. Root-only backups: $BACKUP_DIR"
     echo 'Existing users, GitHub settings, projects and update policies were preserved.'
     echo 'Review Project > Runtime settings. Existing projects remain manual and unconverted.'
+    echo 'Upload/data mappings are applied on the next explicit project start/deploy. Running projects and their files are not changed by this upgrade.'
     echo 'Validate Node/Docker deployment and rollback on a test project before enabling automatic updates.'
     exit 0
   fi

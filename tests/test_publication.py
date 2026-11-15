@@ -5,6 +5,18 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_tailscale_https_does_not_conflict_with_public_ip_but_wildcards_do(self):
+        from helper import parse_ss
+        self.backend['parse_ss']=parse_ss
+        tail='tcp LISTEN 0 4096 100.90.70.96%tailscale0:443 0.0.0.0:* users:(("tailscaled",pid=7992,fd=26))\ntcp LISTEN 0 4096 [fd7a:115c:a1e0::9401:46f0]%tailscale0:443 [::]:* users:(("tailscaled",pid=7992,fd=28))'
+        self.run.side_effect=None;self.run.return_value=tail
+        self.pub.listeners('8.8.8.8',443);self.pub.listeners('8.8.8.8',80)
+        for endpoint in ('0.0.0.0:443','[::]:443','8.8.8.8:443'):
+            self.run.return_value='tcp LISTEN 0 4096 '+endpoint+' 0.0.0.0:* users:(("other",pid=9999,fd=26))'
+            with self.assertRaises(ValueError):self.pub.listeners('8.8.8.8',443)
+        script=(pathlib.Path(__file__).resolve().parents[1]/'scripts/setup-publication.sh').read_text(encoding='utf8')
+        self.assertNotIn('Ports 80/443 are occupied',script)
+        self.assertIn('systemctl mask --runtime nginx.service',script)
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.base=pathlib.Path(self.tmp.name)
         self.cfg={'state_dir':str(self.base/'state'),'publication_dir':str(self.base/'nginx'),'publication_acme':str(self.base/'acme'),'project_root':str(self.base/'projects')}

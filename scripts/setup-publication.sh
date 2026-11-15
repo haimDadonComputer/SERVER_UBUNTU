@@ -7,12 +7,12 @@ SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || { echo 'Ubuntu 24.04 required'; exit 1; }
 [[ -f /etc/ubuntu-control/helper.json && -d /opt/ubuntu-control ]] || { echo 'Upgrade Ubuntu Control first'; exit 1; }
-# Refuse existing listeners that cannot belong to an installed Nginx service.
+# Preparation installs an empty managed proxy, not a public listener. The fresh
+# package is masked until its default site is removed. Check address-specific
+# conflicts at publication time, when the actual public IP is known; Tailscale
+# may already own :443 on its separate interfaces and must remain untouched.
 fresh=false
 command -v nginx >/dev/null || fresh=true
-if ! command -v nginx >/dev/null && ss -H -lnt '( sport = :80 or sport = :443 )' | read -r _; then
-  echo 'Ports 80/443 are occupied. Resolve the existing proxy before preparation.'; exit 1
-fi
 for path in /etc/nginx/ubuntu-control /etc/ubuntu-control-publication /opt/ubuntu-control-acme /var/lib/ubuntu-control-acme; do
   [[ ! -L $path ]] || { echo "Unsafe symlink: $path"; exit 1; }
 done

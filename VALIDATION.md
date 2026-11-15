@@ -1,5 +1,13 @@
 # Verification record — 2026-11-14
 
+## Task panel, ENV import and public publication — 2026-11-15
+
+Local Windows verification: `npm test` passed 24 tests; `npm run check:helper` ran 98 tests, 92 passed and 6 Linux-only tests skipped. `npm run build` passed. The focused Playwright `project runtime` case passed, including the persistent task drawer, no navigation to Jobs, npm-install default, private ENV file preview/merge and console/archive behavior. Screenshot calls were removed; validation used DOM assertions. Bash syntax checks for setup-publication.sh, reload-publication.sh and upgrade.sh passed using Git Bash; `git diff --check` passed.
+
+Coverage includes framed/split helper progress, incomplete-response rejection, bounded redacted event history, ENV grammar/empty-value semantics and authenticated import, exact management origins and link isolation, npm policy compatibility, Nginx rollback and first-publication challenge cleanup, existing UFW rule ownership including later UFW activation, scoped proxy resources, localhost service ownership, rootless Docker label/image/port binding and rejection of wildcard listeners that could bypass HTTPS.
+
+System commands, certificates and proxy changes in unit/API tests use mocks and temporary directories. No Contabo server was accessed. Actual Ubuntu Nginx/systemd sandbox behavior, Certbot issuance/renewal, DNS, public IP reachability and Contabo firewall handling remain unverified; follow the acceptance steps in INSTALL.md with a test project before enabling real public access. The existing new-borny-box database connection/build error is outside this change.
+
 ## Detailed diagnostics — 2026-11-15
 
 Added structured redacted records across command/runner/helper/API/SQLite and expandable frontend reports with copy/download. Git failures retain original command, stage, exit code and sanitized stdout/stderr instead of a generic runuser failure; launcher metadata is separate. GitHub HTTP diagnostics carry status/request ID without response bodies or authorization headers. Existing job rows survive the additive error_details column migration, and old generic errors remain explicitly without recoverable detail.

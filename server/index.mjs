@@ -9,10 +9,13 @@ import { metrics } from './metrics.mjs';
 import { ProjectUpdater } from './project-updater.mjs';
 import { reconcileProjects } from './project-lifecycle.mjs';
 import { installProjectLogs } from './project-log-stream.mjs';
+import { applyNetworkOrigins } from './network.mjs';
+import { storedDetails } from './diagnostics.mjs';
 validateConfig();
 const db = openDatabase(config.data),
-    helper = (a, b) => helperCall(config.socket, a, b);
+    helper = (a, b, onEvent) => helperCall(config.socket, a, b, onEvent);
 const { app, queue } = await createApp({ db, config, helper });
+applyNetworkOrigins(config, await helper('network-status').catch(() => ({})));
 await reconcileProjects(db, helper).catch(() => {});
 const updater = new ProjectUpdater({ db, helper, queue });
 updater.start();
@@ -22,7 +25,7 @@ const stopProjectLogs = installProjectLogs({ wss, db, socketPath: config.socket 
 server.on('upgrade', (req, socket, head) => {
     if (
         req.url !== '/ws' ||
-        req.headers.origin !== config.origin ||
+        !config.origins.includes(req.headers.origin) ||
         !sessionFromRequest(req, db) ||
         wss.clients.size >= 30
     ) {
@@ -108,10 +111,43 @@ const timer = setInterval(async () => {
         busy = false;
     }
 }, 1000);
+let lastJobs = '';
+const jobTimer = setInterval(() => {
+    if (!wss.clients.size) return;
+    const jobs = db
+        .prepare('SELECT * FROM jobs ORDER BY rowid DESC LIMIT 50')
+        .all()
+        .map(({ error_details, ...job }, i) => ({
+            ...job,
+            details: storedDetails(error_details),
+            events:
+                i < 5
+                    ? db
+                          .prepare(
+                              'SELECT * FROM (SELECT * FROM job_events WHERE job=? ORDER BY id DESC LIMIT 12) ORDER BY id'
+                          )
+                          .all(job.id)
+                    : [],
+        }));
+    const data = JSON.stringify({ type: 'jobs', jobs });
+    if (data === lastJobs && [...wss.clients].every((ws) => ws.lastJobs === data)) return;
+    lastJobs = data;
+    for (const ws of wss.clients) {
+        if (!sessionFromRequest(ws.request, db)) {
+            ws.close(1008);
+            continue;
+        }
+        if (ws.readyState === 1 && ws.bufferedAmount < 262144 && ws.lastJobs !== data) {
+            ws.send(data);
+            ws.lastJobs = data;
+        }
+    }
+}, 1000);
 server.listen(config.port, config.host, () =>
     console.log(`Ubuntu Control listening on ${config.host}:${config.port}`)
 );
 function shutdown() {
+    clearInterval(jobTimer);
     stopProjectLogs();
     updater.stop();
     clearInterval(timer);

@@ -33,6 +33,29 @@ test.beforeAll(async () => {
             port: 3080,
         },
         helper: async (action: string, args: any) => {
+            if (action === 'project-env-preview' || action === 'project-env-import') {
+                const imported = Object.fromEntries(
+                    args.text
+                        .trim()
+                        .split('\n')
+                        .map((line: string) => {
+                            const index = line.indexOf('=');
+                            return [line.slice(0, index), line.slice(index + 1)];
+                        })
+                );
+                if (action === 'project-env-import')
+                    environments.set(args.project, {
+                        ...environments.get(args.project),
+                        ...imported,
+                    } as Record<string, string>);
+                return {
+                    keys: Object.keys(
+                        action === 'project-env-import' ? environments.get(args.project)! : imported
+                    ),
+                    publicBuild: [],
+                    restartRequired: action === 'project-env-import',
+                };
+            }
             if (action === 'project-records') return [...rootRecords.values()];
             if (action === 'project-state')
                 return {
@@ -237,7 +260,6 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await expect(page.getByText('נתוני Ubuntu אינם זמינים')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'תעבורת רשת' })).toBeVisible();
     await expect(page.getByText('פג תוקף ההתחברות. יש להתחבר מחדש.')).toHaveCount(0);
-    await page.screenshot({ path: 'test-results/dashboard-desktop.png', fullPage: true });
     await page.getByRole('button', { name: 'פורטים ושירותים', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'פורטים ושירותים', exact: true })).toBeVisible();
     await expect(page.getByText('אין פורטים להצגה')).toBeVisible();
@@ -270,11 +292,6 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await expect(page.getByRole('heading', { name: 'GitHub App', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'בדיקת חיבור', exact: true }).click();
     await expect(page.getByLabel('GitHub App ID')).toHaveValue('123');
-    await page
-        .getByRole('heading', { name: 'GitHub App', exact: true })
-        .locator('..')
-        .locator('..')
-        .screenshot({ path: 'test-results/github-settings.png' });
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await page.getByRole('button', { name: 'ייבוא מ־GitHub', exact: true }).click();
     await expect(page.getByText('owner/private-app', { exact: true })).toBeVisible();
@@ -283,7 +300,6 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await page.getByLabel('חיפוש מאגרי GitHub').fill('private');
     await page.getByRole('button').filter({ hasText: 'owner/private-app' }).click();
     await page.getByRole('checkbox').check();
-    await page.getByRole('dialog').screenshot({ path: 'test-results/github-import.png' });
     await page.getByRole('button', { name: 'ייבוא המאגר', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
     await expect
@@ -312,7 +328,6 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     const reportText = await fs.readFile(reportPath!, 'utf8');
     expect(reportText).toContain('GIT_AUTH_FAILED');
     expect(reportText).not.toContain('ghs_DO_NOT_DISPLAY');
-    await page.screenshot({ path: 'test-results/detailed-error.png', fullPage: true });
     await page.reload();
     await expect(page.getByRole('heading', { name: 'סקירת השרת', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'משימות רקע', exact: true }).click();
@@ -327,7 +342,6 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
     ).toBeTruthy();
-    await page.screenshot({ path: 'test-results/dashboard-mobile.png', fullPage: true });
     expect(errors).toEqual([]);
 });
 
@@ -355,12 +369,16 @@ test('project runtime, private environment metadata, console and archive restora
     await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
+    await expect(dialog.getByLabel('התקנת תלויות')).toHaveValue('install');
     await dialog.getByLabel('בדיקת תקינות').selectOption('http');
     await dialog.getByLabel('התקנת תלויות').selectOption('allow-install');
     await dialog.getByRole('checkbox', { name: 'גישה דרך IP ופורט של השרת' }).check();
-    await page.screenshot({ path: 'test-results/project-runtime.png', fullPage: true });
     await dialog.getByRole('button', { name: 'שמירת הגדרות הפעלה' }).click();
     await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: /^פאנל/ }).click();
+    await expect(page.getByRole('dialog', { name: 'פאנל משימות רקע' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'סגירת פאנל' }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
     await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
@@ -382,6 +400,19 @@ test('project runtime, private environment metadata, console and archive restora
     await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
     await expect(dialog.getByLabel('ערך חדש API_KEY')).toHaveValue('');
     await expect(dialog.getByText('browser-test-private-value')).toHaveCount(0);
+    await dialog
+        .getByLabel('העלאת קובץ ENV (מיזוג)')
+        .setInputFiles({
+            name: '.env',
+            mimeType: 'text/plain',
+            buffer: Buffer.from('API_KEY=uploaded-private-value\nEMPTY=\n'),
+        });
+    await expect(dialog.getByText(/API_KEY \(החלפה\)/)).toBeVisible();
+    await expect(dialog.getByText('uploaded-private-value')).toHaveCount(0);
+    await dialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
+    await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
+    await expect(dialog.getByLabel('ערך חדש EMPTY')).toHaveValue('');
+    expect(environments.get('lifecycle-demo')?.API_KEY).toBe('uploaded-private-value');
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await card.getByRole('button', { name: 'קונסול הפרויקט', exact: true }).click();
     await expect(page.getByText('filtered runtime log')).toBeVisible();
@@ -419,7 +450,6 @@ test('project runtime, private environment metadata, console and archive restora
     await expect(page.getByText('חסר קובץ נעילת תלויות של npm', { exact: true })).toBeVisible();
     await expect(page.getByText('ממתין ללוגים מהפרויקט…', { exact: true })).toHaveCount(0);
     await expect(page.getByText('HTTP fallback log')).toBeVisible({ timeout: 10000 });
-    await page.screenshot({ path: 'test-results/project-console-fallback.png', fullPage: true });
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await card.getByRole('button', { name: 'העברה לארכיון', exact: true }).click();
     await dialog.getByLabel('להמשך הקלידו lifecycle-demo').fill('lifecycle-demo');
@@ -427,7 +457,6 @@ test('project runtime, private environment metadata, console and archive restora
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await page.getByRole('button', { name: /^ארכיון \(/ }).click();
     await expect(card.getByRole('button', { name: 'מחיקה לצמיתות', exact: true })).toBeVisible();
-    await page.screenshot({ path: 'test-results/project-archive.png', fullPage: true });
     await card.getByRole('button', { name: 'שחזור מהארכיון', exact: true }).click();
     await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
@@ -438,6 +467,5 @@ test('project runtime, private environment metadata, console and archive restora
     expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
     ).toBeTruthy();
-    await page.screenshot({ path: 'test-results/projects-mobile.png', fullPage: true });
     expect(errors).toEqual([]);
 });

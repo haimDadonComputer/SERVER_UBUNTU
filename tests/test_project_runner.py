@@ -48,5 +48,9 @@ class RunnerTests(unittest.TestCase):
             root=pathlib.Path(d);target=root/'release';target.mkdir();(target/'package.json').write_text('{"scripts":{}}')
             r.build_target(root,target);self.assertEqual(command.call_args.args[:2],(target,['/usr/bin/env','npm','install']));self.assertFalse((root/'package-lock.json').exists())
             (target/'npm-shrinkwrap.json').write_text('{}');r.build_target(root,target);self.assertEqual(command.call_args.args[1],['/usr/bin/env','npm','ci'])
+    def test_install_policy_uses_install_even_with_a_lockfile(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,'BUILD_CONFIG',{'kind':'node','dependencyInstall':'install'}),patch.object(r,'command') as command:
+            root=pathlib.Path(d);(root/'package.json').write_text('{"scripts":{}}');(root/'package-lock.json').write_text('{}')
+            r.build_target(root,root);self.assertEqual(command.call_args.args[1],['/usr/bin/env','npm','install'])
 
 if __name__=='__main__':unittest.main()

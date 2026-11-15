@@ -38,13 +38,21 @@ const runtime = z.object({
     autostart: z.boolean().default(false),
     testScript: z.string().max(80).default(''),
     buildScript: z.string().max(80).default(''),
-    dependencyInstall: z.enum(['locked', 'allow-install']).default('locked'),
+    dependencyInstall: z.enum(['locked', 'allow-install', 'install']).default('install'),
     listenAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
     internalPort: z.number().int().min(1).max(65535).optional(),
     dataPath: z.string().max(200).optional(),
 });
-export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
-    app.get('/api/project-access', (_req, res) => {
+export function registerLifecycle({
+    app,
+    db,
+    helper,
+    queue,
+    reauth,
+    origin,
+    origins = () => [origin],
+}) {
+    app.get('/api/project-access', async (_req, res) => {
         const addresses = Object.entries(networkInterfaces()).flatMap(([name, items]) =>
             (items || [])
                 .filter((i) => !i.internal && i.family === 'IPv4')
@@ -56,7 +64,9 @@ export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
                     Number(b.interface.startsWith('tailscale')) -
                     Number(a.interface.startsWith('tailscale'))
             );
-        res.json({ addresses });
+        const network = await helper('network-status').catch(() => ({}));
+        if (network.ip) addresses.unshift({ address: network.ip, interface: 'configured-public' });
+        res.json({ addresses, publications: network.projects || {} });
     });
     const save = (record) => {
         if (record?.id)
@@ -70,7 +80,7 @@ export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
             user = req.session.username;
         const job = queue.add('project:' + id, async (stage) => {
             stage(action);
-            const record = await helper(action, { project: id, ...args });
+            const record = await helper(action, { project: id, ...args }, stage);
             if (action === 'project-purge') db.prepare('DELETE FROM projects WHERE id=?').run(id);
             else save(record);
             audit(db, user, action, id);
@@ -128,8 +138,11 @@ export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
             if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
                 throw new Error('נדרשת כתובת HTTP/HTTPS ללא פרטי התחברות');
             if (
-                origin &&
-                url.hostname.replace(/\.$/, '') === new URL(origin).hostname.replace(/\.$/, '')
+                origins().some(
+                    (value) =>
+                        url.hostname.replace(/\.$/, '') ===
+                        new URL(value).hostname.replace(/\.$/, '')
+                )
             )
                 throw new Error(
                     'יש להשתמש בשם מארח נפרד מממשק הניהול כדי לא להעביר לאפליקציה את עוגיות ההתחברות'
@@ -152,6 +165,24 @@ export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
     app.get('/api/projects/:project/env', async (req, res) =>
         res.json(await helper('project-env-meta', { project: req.project.id }))
     );
+    app.post('/api/projects/:project/env/import', async (req, res) => {
+        await reauth(req);
+        if (queue.locks.has('project:' + req.project.id))
+            return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
+        const input = z.object({ text: z.string().max(1048576) }).parse(req.body);
+        const result = await helper('project-env-import', {
+            project: req.project.id,
+            text: input.text,
+        });
+        audit(db, req.session.username, 'project-env-import', req.project.id);
+        res.json(result);
+    });
+    app.post('/api/projects/:project/env/import/preview', async (req, res) => {
+        const input = z.object({ text: z.string().max(1048576) }).parse(req.body);
+        res.json(
+            await helper('project-env-preview', { project: req.project.id, text: input.text })
+        );
+    });
     app.patch('/api/projects/:project/env', async (req, res) => {
         await reauth(req);
         if (queue.locks.has('project:' + req.project.id))

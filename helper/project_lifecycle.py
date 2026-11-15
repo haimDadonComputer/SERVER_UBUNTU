@@ -13,6 +13,7 @@ import uuid
 import stat
 from diagnostics import OperationError,clean,redact
 from project_secrets import atomic_private,read_values,patch_values
+from job_progress import emit
 
 REGISTRY_LOCK=threading.RLock()
 BUILD_LOCK=threading.Lock()
@@ -42,8 +43,8 @@ def validate_runtime(value,options):
     if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or len(path)>200 or any(ord(c)<33 for c in path):raise ValueError('Invalid local health path')
     if health=='http' and port is None:raise ValueError('HTTP health checks require a port')
     result={'kind':kind,'args':args,'health':health,'port':port,'healthPath':path,'autostart':value.get('autostart') is True,'testScript':value.get('testScript',''),'buildScript':value.get('buildScript','')}
-    install=value.get('dependencyInstall','locked')
-    if install not in ('locked','allow-install'):raise ValueError('Invalid dependency install policy')
+    install=value.get('dependencyInstall','install')
+    if install not in ('locked','allow-install','install'):raise ValueError('Invalid dependency install policy')
     result['dependencyInstall']=install
     listen=value.get('listenAddress','127.0.0.1')
     if listen not in ('127.0.0.1','0.0.0.0'):raise ValueError('Invalid listen address')
@@ -140,7 +141,7 @@ class Lifecycle:
         p=self.lookup(identifier)
         old=read_values(self.env_path(identifier));old_public=set(p.get('publicBuild',[]))
         public=args.get('publicBuild',[key for key in p.get('publicBuild',[]) if key not in args.get('unset',[])])
-        result=patch_values(self.env_path(identifier),args.get('set',{}),args.get('unset',[]),public)
+        result=patch_values(self.env_path(identifier),args.get('set',{}),args.get('unset',[]),public,args.get('importEmpty') is True)
         changed=old_public!=set(result['publicBuild']) or any(key in result['publicBuild'] and value!='' and old.get(key)!=value for key,value in args.get('set',{}).items())
         p.update(publicBuild=result['publicBuild'],envPending=True,runtimePending=p.get('runtimePending',False) or changed);self.save(identifier,p)
         result['buildRequired']=p['runtimePending']
@@ -150,6 +151,9 @@ class Lifecycle:
         if p.get('service') and p.get('ownership')!='managed' and args.get('replaceExternal') is not True:raise ValueError('Explicit conversion approval is required for an externally managed service')
         if p.get('service') and p.get('ownership')!='managed':self.assert_unshared(identifier,p)
         runtime=validate_runtime(args.get('runtime'),self.options(identifier))
+        from publication import Publication
+        publication=Publication(self.cfg,self.h).read()['projects'].get(identifier)
+        if publication and (runtime['listenAddress']!='127.0.0.1' or runtime['port']!=p.get('runtime',{}).get('port')):raise ValueError('Disable public access before changing the project listen address or port')
         if self.state(p).get('active')=='active':raise ValueError('Stop the project before changing runtime configuration')
         if runtime['port']:
             for other_id,other in self.h['all_projects'](self.cfg).items():
@@ -265,9 +269,12 @@ class Lifecycle:
             return value=='true|'+p.get('image','')+'|'+identifier
         # Keep Netid in ss output, as required by the shared TCP/UDP parser.
         output=self.h['run'](['/usr/bin/ss','-H','-lntup','sport = :'+str(p['runtime']['port'])])
+        from publication import Publication
+        published=identifier in Publication(self.cfg,self.h).read()['projects']
         unit=self.names(identifier)['unit']
         for row in self.h['parse_ss'](output):
             if row.get('pid') and row.get('protocol')=='tcp':
+                if published and row.get('address') in ('0.0.0.0','::','*'):raise ValueError('Published projects must bind HOST=127.0.0.1; wildcard listening would bypass the proxy')
                 if p['runtime'].get('listenAddress')=='0.0.0.0' and row.get('address') not in ('0.0.0.0','::','*'):continue
                 try:
                     if any(unit in line.split('/') for line in pathlib.Path('/proc/'+str(row['pid'])+'/cgroup').read_text().splitlines()):return True
@@ -303,15 +310,17 @@ class Lifecycle:
             else:result=self.release(identifier,p,args.get('expected'))
             self.provision(identifier,p)
             if start or was_running:
+                emit('starting')
                 if p.get('externalService'):
                     self.h['service_action'](self.cfg,{'service':p['externalService'],'operation':'stop','confirmed':True});p.pop('externalService',None)
                 self.h['run'](['/usr/bin/systemctl','restart',self.names(identifier)['unit']],timeout=45)
-                self.health(identifier,p)
+                emit('health');self.health(identifier,p)
                 p.update(desired='running',activeCommit=p['preparedCommit'],envPending=False,deployment='healthy')
             else:p.update(desired='stopped',deployment='prepared-stopped')
             p.update(failedCommit=None,runtimePending=False,deployedAt=timestamp());self.save(identifier,p,True);self.finish(identifier)
             return self.public(identifier,p)
         except Exception as error:
+            emit('rollback')
             restored=False;recovery_error=None
             try:
                 if result:restored=json.loads(self.h['project_run'](self.cfg,p,['rollback',result['release']],120)).get('restored',False)
@@ -394,6 +403,10 @@ class Lifecycle:
         p=self.lookup(identifier);original=dict(p)
         if args.get('confirmName')!=identifier:raise ValueError('Type the project folder name to confirm')
         if p.get('service'):self.assert_unshared(identifier,p)
+        from publication import Publication,NETWORK_LOCK
+        with NETWORK_LOCK:
+            publication=Publication(self.cfg,self.h)
+            if identifier in publication.read()['projects']:publication.publish(identifier,{'enabled':False,'confirmed':True})
         root=pathlib.Path(p['root']);base=root.parent/'.archives';base.mkdir(mode=0o700,exist_ok=True)
         if base.is_symlink() or base.stat().st_uid!=os.geteuid() or base.stat().st_mode&0o022:raise ValueError('Unsafe archive root')
         destination=base/(identifier+'-'+uuid.uuid4().hex)

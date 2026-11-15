@@ -15,6 +15,7 @@ import { listFiles, readFile, writeFile, createDirectory, deleteEntry } from './
 import { metrics } from './metrics.mjs';
 import { sanitizeDetails, storedDetails } from './diagnostics.mjs';
 import { registerLifecycle, reconcileProjects, projectView } from './project-lifecycle.mjs';
+import { registerNetwork } from './network.mjs';
 
 const credentials = z.object({
     username: z.string().min(3).max(64),
@@ -46,6 +47,7 @@ export async function createApp({ db, config, helper }) {
     const app = express(),
         queue = new Queue(db);
     app.disable('x-powered-by');
+    app.set('trust proxy', 'loopback');
     app.use(
         helmet({
             contentSecurityPolicy: {
@@ -70,7 +72,7 @@ export async function createApp({ db, config, helper }) {
         res.set('Cache-Control', 'no-store');
         if (
             !['GET', 'HEAD', 'OPTIONS'].includes(req.method) &&
-            req.headers.origin !== config.origin
+            !(config.origins || [config.origin]).includes(req.headers.origin)
         )
             return res.status(403).json({ error: 'מקור הבקשה אינו מורשה' });
         next();
@@ -354,7 +356,7 @@ export async function createApp({ db, config, helper }) {
                 p.github_repository_id
             );
             stage('מוריד מאגר באמצעות GitHub App');
-            await helper('project-clone', { project: input.id, confirmed: true });
+            await helper('project-clone', { project: input.id, confirmed: true }, stage);
             db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(input.id);
             audit(db, req.session.username, 'github-import', input.id);
         });
@@ -410,7 +412,16 @@ export async function createApp({ db, config, helper }) {
             return res.status(409).json({ error: 'הפרויקט בארכיון. יש לשחזר אותו תחילה.' });
         next();
     });
-    registerLifecycle({ app, db, helper, queue, reauth, origin: config.origin });
+    registerLifecycle({
+        app,
+        db,
+        helper,
+        queue,
+        reauth,
+        origin: config.origin,
+        origins: () => config.origins || [config.origin],
+    });
+    registerNetwork({ app, db, helper, queue, reauth, config });
     app.get('/api/projects/:project/qr', async (req, res) =>
         res.json(await helper('project-qr', { project: req.project.id }))
     );
@@ -455,7 +466,11 @@ export async function createApp({ db, config, helper }) {
                           ? 'מושך קוד ללא פריסה'
                           : 'בונה גרסה ובודק תקינות'
                 );
-                await helper('project-' + action, { project: p.id, confirmed: true, expected });
+                await helper(
+                    'project-' + action,
+                    { project: p.id, confirmed: true, expected },
+                    stage
+                );
                 db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(p.id);
                 audit(db, req.session.username, 'project-' + action, p.id);
             });
@@ -512,9 +527,27 @@ export async function createApp({ db, config, helper }) {
                 .map(({ error_details, ...row }) => ({
                     ...row,
                     details: storedDetails(error_details),
+                    events: db
+                        .prepare(
+                            'SELECT * FROM (SELECT * FROM job_events WHERE job=? ORDER BY id DESC LIMIT 12) ORDER BY id'
+                        )
+                        .all(row.id),
                 }))
         )
     );
+    app.get('/api/jobs/:id/events', (req, res) => {
+        const cursor = Math.max(0, Number(req.query.cursor) || 0);
+        const job = db.prepare('SELECT id,status,stage FROM jobs WHERE id=?').get(req.params.id);
+        if (!job) return res.status(404).json({ error: 'המשימה לא נמצאה' });
+        const first = db.prepare('SELECT MIN(id) AS id FROM job_events WHERE job=?').get(job.id).id;
+        res.json({
+            job,
+            gap: !!cursor && first > cursor + 1,
+            events: db
+                .prepare('SELECT * FROM job_events WHERE job=? AND id>? ORDER BY id LIMIT 300')
+                .all(job.id, cursor),
+        });
+    });
     app.get('/api/audit', (_req, res) =>
         res.json(db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 200').all())
     );

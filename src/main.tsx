@@ -40,6 +40,8 @@ import './style.css';
 import { GitHubSettings, GitHubImport } from './github';
 import { ErrorDetails } from './diagnostics';
 import { ProjectActions, ProjectEnvironment, ProjectConsole } from './projects';
+import { JobCard, stageLabel } from './jobs';
+import { NetworkSettings } from './network';
 type Any = Record<string, any>;
 let csrf = '';
 async function api(url: string, method = 'GET', body?: unknown) {
@@ -109,6 +111,9 @@ function App() {
         [projectLogError, setProjectLogError] = useState(''),
         [projectLogGap, setProjectLogGap] = useState(''),
         [jobs, setJobs] = useState<Any[]>([]),
+        [jobPanel, setJobPanel] = useState(false),
+        [selectedJob, setSelectedJob] = useState(''),
+        [publications, setPublications] = useState<Any>({}),
         [connected, setConnected] = useState(false),
         [modal, setModal] = useState<React.ReactNode>(null),
         [query, setQuery] = useState(''),
@@ -245,6 +250,7 @@ function App() {
         if (results[4].status === 'fulfilled') setSettings(results[4].value);
         if (results[5].status === 'fulfilled') setArchivedProjects(results[5].value);
         if (results[6].status === 'fulfilled') setServerAddresses(results[6].value.addresses || []);
+        if (results[6].status === 'fulfilled') setPublications(results[6].value.publications || {});
     }
     useEffect(() => {
         if (!user) return;
@@ -272,6 +278,7 @@ function App() {
                     setMetrics(data.metrics);
                     setInv(data.inventory);
                 }
+                if (data.type === 'jobs') setJobs(data.jobs);
                 if (data.type === 'logs') setLogs(data.text);
                 if (data.type === 'log-error') setError(data.error);
                 if (data.project === projectLogRef.current?.id) {
@@ -306,6 +313,12 @@ function App() {
                 .catch(() => {});
             api('/projects?state=archived')
                 .then(setArchivedProjects)
+                .catch(() => {});
+            api('/project-access')
+                .then((data) => {
+                    setServerAddresses(data.addresses || []);
+                    setPublications(data.publications || {});
+                })
                 .catch(() => {});
         }, 5000);
         return () => {
@@ -699,6 +712,12 @@ function App() {
                         סביבת ניהול <ChevronLeft size={13} /> <strong>{titles[page]}</strong>
                     </div>
                     <div className="header-actions">
+                        <button onClick={() => setJobPanel(!jobPanel)} aria-expanded={jobPanel}>
+                            פאנל{' '}
+                            {activeJobs.length > 0 && (
+                                <span className="badge">{activeJobs.length}</span>
+                            )}
+                        </button>
                         <span className={'connection ' + (connected ? 'online' : '')}>
                             <i />
                             {connected ? 'חיבור חי' : 'החיבור נותק'}
@@ -1271,6 +1290,30 @@ function App() {
                                                 />
                                             </div>
                                             <h2>{p.name}</h2>
+                                            <p>
+                                                מצב שירות:{' '}
+                                                {p.lifecycle === 'archived'
+                                                    ? 'בארכיון'
+                                                    : inv.services?.find(
+                                                          (s: Any) => s.id === p.service
+                                                      )?.status || 'טרם התקבל מצב'}
+                                            </p>
+                                            {jobs
+                                                .filter((j) => j.resource === 'project:' + p.id)
+                                                .slice(0, 1)
+                                                .map((j) => (
+                                                    <button
+                                                        className="secondary"
+                                                        key={j.id}
+                                                        onClick={() => {
+                                                            setSelectedJob(j.id);
+                                                            setJobPanel(true);
+                                                        }}
+                                                    >
+                                                        פעולה: {stageLabel(j.status)} ·{' '}
+                                                        {stageLabel(j.stage)}
+                                                    </button>
+                                                ))}
                                             <p className="mono muted">{p.root}</p>
                                             <div className="project-meta">
                                                 <span>
@@ -1300,6 +1343,7 @@ function App() {
                                                     )
                                                 }
                                                 serverAddresses={serverAddresses}
+                                                publication={publications[p.id]}
                                                 console={openProjectConsole}
                                                 totpEnabled={!!user.totpEnabled}
                                             />
@@ -1697,6 +1741,7 @@ function App() {
                                     )
                                 }
                                 serverAddresses={serverAddresses}
+                                publication={publications[fileProject.id]}
                                 console={openProjectConsole}
                                 totpEnabled={!!user.totpEnabled}
                             />
@@ -1947,28 +1992,10 @@ function App() {
                         <section className="panel">
                             <div className="panel-heading">
                                 <h2>תור משימות</h2>
-                                <span className="muted">התוצאה מוצגת רק לאחר השלמת הפעולה</span>
+                                <span className="muted">שלבים ופלט מתעדכנים במהלך הפעולה</span>
                             </div>
                             {jobs.length ? (
-                                jobs.map((j) => (
-                                    <div className="job" key={j.id}>
-                                        <div className="grow">
-                                            <strong>{j.stage}</strong>
-                                            <small className="mono">
-                                                {j.resource} · {j.created}
-                                            </small>
-                                            {j.error && <p className="danger-text">{j.error}</p>}
-                                            <ErrorDetails details={j.details} jobId={j.id} />
-                                            {j.error && !j.details && (
-                                                <small>
-                                                    לשגיאה זו לא נשמר פירוט נוסף. ניסיון חדש לאחר
-                                                    העדכון ייצור דוח מפורט.
-                                                </small>
-                                            )}
-                                        </div>
-                                        <Badge value={j.status} />
-                                    </div>
-                                ))
+                                jobs.map((j) => <JobCard key={j.id} job={j} />)
                             ) : (
                                 <Empty
                                     icon={<Activity />}
@@ -1982,6 +2009,7 @@ function App() {
                         <>
                             <div className="settings-grid">
                                 <GitHubSettings api={api} totpEnabled={!!user.totpEnabled} />
+                                <NetworkSettings api={api} totpEnabled={!!user.totpEnabled} />
                                 <section className="panel">
                                     <div className="panel-heading">
                                         <h2>
@@ -2234,6 +2262,23 @@ function App() {
                     </footer>
                 </div>
             </main>
+            {jobPanel && (
+                <aside className="jobs-drawer" role="dialog" aria-label="פאנל משימות רקע">
+                    <div className="panel-heading">
+                        <h2>משימות ברקע</h2>
+                        <button aria-label="סגירת פאנל" onClick={() => setJobPanel(false)}>
+                            <X size={18} />
+                        </button>
+                    </div>
+                    {jobs.length ? (
+                        jobs.map((j) => (
+                            <JobCard key={j.id} job={j} selected={j.id === selectedJob} />
+                        ))
+                    ) : (
+                        <p>אין משימות להצגה</p>
+                    )}
+                </aside>
+            )}
             {modal}
             {totpSecret && (
                 <Form

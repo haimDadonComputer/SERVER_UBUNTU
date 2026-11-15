@@ -14,6 +14,7 @@ import {
     ExternalLink,
 } from 'lucide-react';
 import { ErrorDetails } from './diagnostics';
+import { NetworkSettings } from './network';
 type Data = Record<string, any>;
 type Api = (path: string, method?: string, body?: unknown) => Promise<any>;
 function Popup({
@@ -47,6 +48,7 @@ export function ProjectActions({
     console: openConsole,
     totpEnabled,
     serverAddresses = [],
+    publication,
 }: {
     project: Data;
     api: Api;
@@ -55,6 +57,7 @@ export function ProjectActions({
     console: (id: string) => void;
     totpEnabled: boolean;
     serverAddresses?: Data[];
+    publication?: Data;
 }) {
     const [modal, setModal] = useState(''),
         [busy, setBusy] = useState(false),
@@ -72,7 +75,7 @@ export function ProjectActions({
         address
             ? `http://${address}:${p.runtime.port}/`
             : '';
-    const projectUrl = p.launch_url || automaticUrl;
+    const projectUrl = p.launch_url || publication?.url || automaticUrl;
     async function action(path: string, method = 'POST', body: Data = { confirmed: true }) {
         if (busy) return;
         setBusy(true);
@@ -114,6 +117,9 @@ export function ProjectActions({
                     </>
                 ) : (
                     <>
+                        <button className="secondary" onClick={() => setModal('publication')}>
+                            פרסום באינטרנט / HTTPS
+                        </button>
                         {projectUrl ? (
                             <a
                                 className="button secondary"
@@ -256,6 +262,16 @@ export function ProjectActions({
                     יומן ubuntu-control-helper לפני ניסיון נוסף. הקונסול זמין לצפייה.
                 </p>
             )}
+            {modal === 'publication' && (
+                <Popup title="פרסום הפרויקט" onClose={() => setModal('')}>
+                    <NetworkSettings
+                        api={api}
+                        totpEnabled={totpEnabled}
+                        project={p}
+                        onQueued={onQueued}
+                    />
+                </Popup>
+            )}
             {modal === 'runtime' && (
                 <RuntimeEditor
                     p={p}
@@ -324,7 +340,7 @@ export function ProjectActions({
                     </form>
                 </Popup>
             )}
-            {modal && modal !== 'runtime' && modal !== 'link' && (
+            {modal && modal !== 'runtime' && modal !== 'link' && modal !== 'publication' && (
                 <Popup
                     title={
                         {
@@ -481,7 +497,7 @@ function RuntimeEditor({
                 autostart: false,
                 testScript: '',
                 buildScript: '',
-                dependencyInstall: 'locked',
+                dependencyInstall: 'install',
                 listenAddress: '127.0.0.1',
                 internalPort: 3000,
                 dataPath: '/app/shared',
@@ -556,9 +572,10 @@ function RuntimeEditor({
                             <label>
                                 התקנת תלויות
                                 <select
-                                    value={runtime.dependencyInstall || 'locked'}
+                                    value={runtime.dependencyInstall || 'install'}
                                     onChange={(e) => set('dependencyInstall', e.target.value)}
                                 >
+                                    <option value="install">npm install — ברירת מחדל</option>
                                     <option value="locked">npm ci — דורש קובץ נעילה</option>
                                     <option value="allow-install">
                                         npm install כאשר אין קובץ נעילה
@@ -765,6 +782,8 @@ export function ProjectEnvironment({
     totpEnabled: boolean;
     close: () => void;
 }) {
+    const [importText, setImportText] = useState<string | null>(null);
+    const [importNames, setImportNames] = useState<string[]>([]);
     const [metadata, setMetadata] = useState<Data>({ keys: [], publicBuild: [] }),
         [rows, setRows] = useState<Data[]>([]),
         [password, setPassword] = useState(''),
@@ -795,6 +814,65 @@ export function ProjectEnvironment({
     }
     return (
         <Popup title="משתני סביבה מוגנים" onClose={close}>
+            <label>
+                העלאת קובץ ENV (מיזוג)
+                <input
+                    type="file"
+                    accept=".env,text/plain"
+                    onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        setImportText(null);
+                        setImportNames([]);
+                        setError('');
+                        if (file.size > 1048576) {
+                            setError('הקובץ גדול מ־1 MiB');
+                            return;
+                        }
+                        try {
+                            const text = new TextDecoder('utf-8', { fatal: true }).decode(
+                                await file.arrayBuffer()
+                            );
+                            const preview = await api(
+                                `/projects/${project.id}/env/import/preview`,
+                                'POST',
+                                { text }
+                            );
+                            setImportText(text);
+                            setImportNames(preview.keys);
+                        } catch (error) {
+                            setError((error as Error).message);
+                        }
+                    }}
+                />
+            </label>
+            {importText !== null && (
+                <div className="alert warning">
+                    <p>
+                        מוכן למיזוג:{' '}
+                        {importNames
+                            .map(
+                                (name) =>
+                                    `${name} (${metadata.keys.includes(name) ? 'החלפה' : 'חדש'})`
+                            )
+                            .join(', ')}
+                    </p>
+                    <p>
+                        הערכים יישמרו לריצה בלבד. משתנים אחרים יישמרו. השמירה מחייבת אימות בהמשך
+                        הטופס.
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setImportText(null);
+                            setImportNames([]);
+                        }}
+                    >
+                        ביטול הייבוא
+                    </button>
+                </div>
+            )}
             <p className="muted">
                 הערכים הקיימים אינם מוחזרים לדפדפן. שדה ריק משאיר ערך קיים ללא שינוי. סודות נשמרים
                 לריצה בלבד; סימון ציבורי לבנייה עלול להכניס ערך לקובצי Frontend.
@@ -816,14 +894,23 @@ export function ProjectEnvironment({
                                 if (row.public) publicBuild.push(row.name);
                             }
                         }
-                        const result = await api(`/projects/${project.id}/env`, 'PATCH', {
-                            set,
-                            unset,
-                            publicBuild,
-                            password,
-                            ...(totpEnabled ? { code } : {}),
-                        });
+                        const result =
+                            importText !== null
+                                ? await api(`/projects/${project.id}/env/import`, 'POST', {
+                                      text: importText,
+                                      password,
+                                      ...(totpEnabled ? { code } : {}),
+                                  })
+                                : await api(`/projects/${project.id}/env`, 'PATCH', {
+                                      set,
+                                      unset,
+                                      publicBuild,
+                                      password,
+                                      ...(totpEnabled ? { code } : {}),
+                                  });
                         setMetadata(result);
+                        setImportText(null);
+                        setImportNames([]);
                         setPassword('');
                         setCode('');
                         setRows(

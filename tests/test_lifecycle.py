@@ -31,7 +31,7 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_runtime({**self.runtime,**update},options)
         self.assertEqual(validate_runtime({**self.runtime,'args':['--name','a b']},options)['args'],['--name','a b'])
         self.assertEqual(validate_runtime(self.runtime,options)['listenAddress'],'127.0.0.1')
-        self.assertEqual(validate_runtime(self.runtime,options)['dependencyInstall'],'locked')
+        self.assertEqual(validate_runtime(self.runtime,options)['dependencyInstall'],'install')
         with self.assertRaises(ValueError):validate_runtime({**self.runtime,'listenAddress':'evil.test'},options)
     def test_http_ownership_uses_netid_and_rejects_loopback_for_remote_access(self):
         p=self.managed();self.backend['parse_ss']=helper_backend.parse_ss

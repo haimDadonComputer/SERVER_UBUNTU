@@ -164,3 +164,22 @@ test('queue serializes jobs, prevents duplicates and records failures', async (t
     assert.ok(!job.error.includes('secret'));
     assert.equal(queue.locks.size, 0);
 });
+test('job progress is bounded, redacted and keeps stage timestamps', async (t) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-progress-')),
+        db = openDatabase(root),
+        queue = new Queue(db);
+    t.after(async () => {
+        db.close();
+        await fs.rm(root, { recursive: true, force: true });
+    });
+    const id = queue.add('project:demo', async (stage) => {
+        for (let i = 0; i < 350; i++)
+            stage({ stage: 'step-' + i, text: 'token=ghs_DO_NOT_DISPLAY' });
+    });
+    await queue.tail;
+    const events = db.prepare('SELECT * FROM job_events WHERE job=?').all(id);
+    assert.equal(events.length, 300);
+    assert.ok(events.every((e) => e.time));
+    assert.ok(!JSON.stringify(events).includes('ghs_DO_NOT_DISPLAY'));
+    assert.ok(db.prepare('SELECT started FROM jobs WHERE id=?').get(id).started);
+});

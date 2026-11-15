@@ -32,6 +32,16 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
             return { keys: ['API_KEY'], publicBuild: [], restartRequired: false };
         if (action === 'project-env-patch')
             return { keys: Object.keys(args.set), publicBuild: [], restartRequired: true };
+        if (action === 'project-env-import' || action === 'project-env-preview')
+            return { keys: ['API_KEY'], publicBuild: [], restartRequired: true };
+        if (action.startsWith('network-'))
+            return {
+                ip: '8.8.8.8',
+                domain: 'control.example.com',
+                email: 'admin@example.com',
+                management: action === 'network-management',
+                projects: {},
+            };
         if (action === 'project-records') return [record];
         if (action === 'project-log-history')
             return [
@@ -84,6 +94,60 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
     assert.equal((await request('/project-access')).status, 200);
+    assert.equal(
+        (
+            await request('/projects/demo/env/import', 'POST', {
+                text: 'API_KEY=private-value',
+                password: 'wrong',
+            })
+        ).status,
+        403
+    );
+    response = await request('/projects/demo/env/import', 'POST', {
+        text: 'API_KEY=private-value',
+        password,
+    });
+    assert.equal(response.status, 200);
+    assert.ok(!(await response.text()).includes('private-value'));
+    assert.equal(
+        (
+            await request('/network', 'PATCH', {
+                ip: '8.8.8.8',
+                domain: 'control.example.com',
+                email: 'admin@example.com',
+                password: 'wrong',
+            })
+        ).status,
+        403
+    );
+    response = await request('/network/management', 'POST', {
+        enabled: true,
+        confirmed: true,
+        password,
+    });
+    assert.equal(response.status, 202);
+    await queue.tail;
+    assert.ok(config.origins.includes('https://control.example.com'));
+    assert.ok(config.origins.includes(config.origin));
+    assert.equal(
+        (
+            await request(
+                '/projects/demo/env/import',
+                'POST',
+                { text: 'API_KEY=x', password },
+                { 'X-CSRF-Token': 'wrong' }
+            )
+        ).status,
+        403
+    );
+    assert.equal(
+        (
+            await request('/projects/demo/link', 'PATCH', {
+                url: 'https://control.example.com:9000/',
+            })
+        ).status,
+        400
+    );
     for (const url of [
         'javascript:alert(1)',
         'https://user:secret@example.test',

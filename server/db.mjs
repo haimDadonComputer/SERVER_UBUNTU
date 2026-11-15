@@ -36,6 +36,11 @@ export function openDatabase(dir) {
             .map((c) => c.name)
     );
     if (!jobColumns.has('error_details')) db.exec('ALTER TABLE jobs ADD COLUMN error_details TEXT');
+    if (!jobColumns.has('started')) db.exec('ALTER TABLE jobs ADD COLUMN started TEXT');
+    if (!jobColumns.has('action')) db.exec('ALTER TABLE jobs ADD COLUMN action TEXT');
+    db.exec(
+        `CREATE TABLE IF NOT EXISTS job_events(id INTEGER PRIMARY KEY,job TEXT NOT NULL REFERENCES jobs(id),time TEXT NOT NULL,stage TEXT NOT NULL,text TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS job_events_job ON job_events(job,id)`
+    );
     db.exec(
         "UPDATE jobs SET status='interrupted',error='Application restarted; inspect project state before retrying' WHERE status IN ('queued','running')"
     );

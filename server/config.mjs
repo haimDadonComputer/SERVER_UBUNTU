@@ -4,6 +4,10 @@ export const config = {
     port: Number(process.env.PORT || 3080),
     host: process.env.HOST || '127.0.0.1',
     origin: process.env.PUBLIC_ORIGIN || 'http://localhost:5173',
+    extraOrigins: (process.env.PUBLIC_ORIGINS || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
     data: path.resolve(process.env.DATA_DIR || 'data'),
     socket: process.env.HELPER_SOCKET || '/run/ubuntu-control/helper.sock',
     projects: path.resolve(process.env.PROJECT_ROOT || 'data/projects'),
@@ -11,6 +15,11 @@ export const config = {
     key: process.env.MASTER_KEY || '',
 };
 export function validateConfig() {
+    for (const origin of config.extraOrigins) {
+        const url = new URL(origin);
+        if (url.origin !== origin || url.protocol !== 'https:')
+            throw new Error('PUBLIC_ORIGINS must contain exact HTTPS origins');
+    }
     if (!/^[a-f0-9]{64}$/i.test(config.key))
         throw new Error('MASTER_KEY must contain 64 hex characters');
     if (!config.dev && !config.origin.startsWith('https://'))

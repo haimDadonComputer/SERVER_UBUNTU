@@ -5,6 +5,9 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
 from diagnostics import failure,decode,exception_details,OperationError,clean
 from project_lifecycle import Lifecycle,dispatch_lifecycle,READ_ACTIONS,MUTATIONS,REGISTRY_LOCK,BUILD_LOCK,PROJECT_LOCKS,project_lock,rehydrate,recover_transactions
 from project_logs import ProjectLogHub
+from project_secrets import parse_import
+from job_progress import LOCAL as PROGRESS,execute as progress_execute
+from publication import dispatch_publication,Publication,NETWORK_LOCK
 PROJECT_LOG_HUB=None
 
 CONFIG = '/etc/ubuntu-control/helper.json'
@@ -17,7 +20,7 @@ def run(argv, timeout=20, check=True, input_text=None):
     if input_text:
         try:secrets=[json.loads(input_text).get('token','')]
         except (ValueError,AttributeError):pass
-    try:p = subprocess.run(argv, input=input_text, capture_output=True, text=True, timeout=timeout, env=ENV, cwd='/')
+    try:p = (progress_execute if getattr(PROGRESS,'callback',None) else subprocess.run)(argv, input=input_text, capture_output=True, text=True, timeout=timeout, env=ENV, cwd='/')
     except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,'system-command','/',secrets) from None
     if check and p.returncode:
         child=decode(p.stderr,secrets)
@@ -407,6 +410,7 @@ def import_github_project(cfg,args):
 def project_run(cfg, p, args, timeout=30):
     # Run a fixed, root-owned runner as the isolated project user. It drops all web/helper privileges.
     env=['/usr/bin/env','UC_EXPECTED_REPO='+(p.get('repo') or ''),'UC_EXPECTED_BRANCH='+(p.get('branch') or 'main')]
+    if getattr(PROGRESS,'callback',None):env+=['UC_PROGRESS=1']
     credential_input=None
     if p.get('ownership')=='managed':
         runtime=p['runtime'];env+=['UC_RUNTIME_BUILD='+json.dumps({'kind':runtime['kind'],'mode':runtime.get('mode'),'dependencyInstall':runtime.get('dependencyInstall','locked'),'testScript':runtime.get('testScript',''),'buildScript':runtime.get('buildScript',''),'skipDocker':True})]
@@ -431,6 +435,18 @@ def project_run(cfg, p, args, timeout=30):
 
 def dispatch(cfg, action, args):
     global PROJECT_LOG_HUB
+    if action.startswith('network-'):return dispatch_publication(cfg,action,args,globals())
+    if action=='project-env-preview':
+        Lifecycle(cfg,globals()).lookup(project_identifier(args.get('project')))
+        return {'keys':list(parse_import(args.get('text')))}
+    if action=='project-env-import':
+        identifier=project_identifier(args.get('project'))
+        with project_lock(identifier):
+            if FIREWALL_WORK.is_set() or (pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'pending.json').exists():raise ValueError('A firewall operation is pending')
+            life=Lifecycle(cfg,globals());values=parse_import(args.get('text'))
+            if life.transaction_path(identifier).exists():raise ValueError('Project recovery is pending')
+            p=life.lookup(identifier)
+            return life.environment(identifier,{'set':values,'importEmpty':True,'publicBuild':[k for k in p.get('publicBuild',[]) if k not in values]})
     if action in ('project-clone','project-pull','project-rollback') and Lifecycle(cfg,globals()).transaction_path(project_identifier(args.get('project'))).exists():raise ValueError('Project recovery is pending')
     pending_file = pathlib.Path(cfg.get('state_dir','/var/lib/ubuntu-control-helper'))/'pending.json'
     if (pending_file.exists() or FIREWALL_WORK.is_set()) and action in (MUTATIONS | {'project-deploy','project-clone','project-rollback','service'}):
@@ -462,6 +478,7 @@ def dispatch(cfg, action, args):
     if action == 'firewall-status': return firewall_status(cfg)
     if action == 'firewall-change':
         with REGISTRY_LOCK:
+            if FIREWALL_WORK.is_set():raise ValueError('Wait for the active network operation')
             if any(lock.locked() for lock in PROJECT_LOCKS.values()):raise ValueError('Wait for active project/service operations before changing the firewall')
             FIREWALL_WORK.set()
         try:return firewall_change(cfg,args)
@@ -548,6 +565,8 @@ def serve():
     os.chown(socket_path,0,grp.getgrnam(cfg.get('web_group','ubuntu-control')).gr_gid)
     allowed = pwd.getpwnam(cfg.get('web_user','ubuntu-control')).pw_uid
     recover_transactions(cfg,globals())
+    Publication(cfg,globals()).recover()
+    Publication(cfg,globals()).clear_bootstrap()
     threading.Thread(target=watchdog,args=(cfg,),daemon=True).start()
     threading.Thread(target=rehydrate,args=(cfg,globals()),daemon=True).start()
     server.listen(16)
@@ -562,10 +581,17 @@ def serve():
                     chunk=conn.recv(65536)
                     if not chunk: raise ValueError('Incomplete request')
                     data+=chunk
-                    if len(data)>100000: raise ValueError('Request too large')
+                    if len(data)>2200000: raise ValueError('Request too large')
                 request=json.loads(data.split(b'\n')[0])
                 if not isinstance(request,dict) or not isinstance(request.get('action'),str) or len(request['action'])>80 or not isinstance(request.get('args',{}),dict):raise ValueError('Invalid helper request')
                 action=request['action'];args=request.get('args',{})
+                send_lock=threading.Lock()
+                def progress(event):
+                    try:
+                        with send_lock:conn.sendall((json.dumps({'event':event})+'\n').encode())
+                    except OSError:pass # Client disconnect must not interrupt transaction recovery.
+                PROGRESS.callback=progress
+                PROGRESS.secrets=Lifecycle(cfg,globals()).secret_values(args['project']) if args.get('project') in all_projects(cfg) else ()
                 # Read-only and long-running project work never holds the firewall lock.
                 if action=='project-log-stream':
                     global PROJECT_LOG_HUB

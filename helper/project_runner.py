@@ -3,6 +3,7 @@
 import os, sys, json, subprocess, pathlib, re, time,shutil,hashlib
 from git_credentials import credentials
 from diagnostics import failure,exception_details,serialize,OperationError
+from job_progress import PREFIX
 
 GITHUB_TOKEN=None
 BUILD_ENV={}
@@ -17,13 +18,38 @@ def readable_release(releases,target):
             path=pathlib.Path(directory)/name
             if not path.is_symlink():path.chmod(0o750 if path.stat().st_mode & 0o111 else 0o640)
 
-def command(root, argv, timeout=240):
+def command(root, argv, timeout=240,env_override=None):
     env = dict(os.environ, **BUILD_ENV, GIT_TERMINAL_PROMPT='0', GIT_ALLOW_PROTOCOL='https:ssh', GIT_SSH_COMMAND='/usr/bin/ssh -oBatchMode=yes -oStrictHostKeyChecking=yes', npm_config_audit='false')
+    if env_override:env.update(env_override)
     name=pathlib.Path(argv[0]).name
     if name=='git':stage='git-'+next((x for x in argv[1:] if x in ('clone','fetch','remote','status','rev-parse','for-each-ref','log','branch','merge','worktree')),'command')
     elif name=='env' and len(argv)>2 and argv[1]=='npm':stage='npm-'+(argv[3] if argv[2]=='run' and len(argv)>3 else argv[2])
     else:stage=' '.join(argv[:3])
-    try:p = subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=timeout)
+    try:
+        if os.environ.get('UC_PROGRESS')=='1':
+            from diagnostics import redact
+            import threading
+            def event(text=''):print(PREFIX+json.dumps({'stage':stage,'text':redact(text,(GITHUB_TOKEN,))}),file=sys.stderr,flush=True)
+            event()
+            proc=subprocess.Popen(argv,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            output=[[],[]]
+            def consume(stream,index):
+                while True:
+                    line=stream.readline(16384)
+                    if not line:break
+                    output[index].append(line)
+                    if len(output[index])>2000:output[index].pop(0)
+                    event(line)
+                stream.close()
+            readers=[threading.Thread(target=consume,args=(stream,i),daemon=True) for i,stream in enumerate((proc.stdout,proc.stderr))]
+            for reader in readers:reader.start()
+            try:proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill();proc.wait();raise
+            finally:
+                for reader in readers:reader.join(timeout=5)
+            p=subprocess.CompletedProcess(argv,proc.returncode,''.join(output[0]),''.join(output[1]))
+        else:p = subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=timeout)
     except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,stage,root,(GITHUB_TOKEN,)) from None
     if p.returncode: raise failure(argv,root,stage,returncode=p.returncode,stdout=p.stdout,stderr=p.stderr,secrets=(GITHUB_TOKEN,))
     return p.stdout.strip()
@@ -40,10 +66,7 @@ def network_command(root,argv):
         # checks the exact host + repository path, including URL rewrite attempts.
         argv=[argv[0],'-c','core.hooksPath=/dev/null','-c','credential.helper=','-c','credential.username=x-access-token','-c','credential.useHttpPath=true','-c','http.followRedirects=false','-c','http.extraHeader=',*argv[1:]]
         stage='git-clone' if 'clone' in argv else 'git-fetch'
-        try:p=subprocess.run(argv,cwd=root,env=env,capture_output=True,text=True,timeout=240)
-        except (OSError,subprocess.TimeoutExpired) as error:raise exception_details(error,stage,root,(GITHUB_TOKEN,)) from None
-        if p.returncode:raise failure(argv,root,stage,returncode=p.returncode,stdout=p.stdout,stderr=p.stderr,secrets=(GITHUB_TOKEN,))
-        return p.stdout.strip()
+        return command(root,argv,240,env_override=env)
 
 def fetch(root,*args):return network_command(root,['/usr/bin/git','fetch',*args])
 
@@ -80,9 +103,10 @@ def build_target(root,target):
     if (target/'package.json').exists() and kind!='docker':
         if any((target/name).is_symlink() for name in ('package-lock.json','npm-shrinkwrap.json')):raise ValueError('Symlink lockfiles are prohibited')
         locked=any((target/name).is_file() for name in ('package-lock.json','npm-shrinkwrap.json'))
-        if not locked and BUILD_CONFIG.get('dependencyInstall','locked')!='allow-install':
+        policy=BUILD_CONFIG.get('dependencyInstall','locked')
+        if not locked and policy not in ('allow-install','install'):
             raise OperationError('חסר קובץ נעילת תלויות של npm',{'code':'NPM_LOCKFILE_MISSING','stage':'dependency-install','cwd':str(target),'stderr':'Node projects require package-lock.json or npm-shrinkwrap.json for npm ci','hint':'הוסיפו package-lock.json למאגר, או בחרו במפורש בהגדרות ההפעלה npm install כאשר אין קובץ נעילה. אם הפרויקט משתמש ב־pnpm/yarn/bun, השתמשו ב־Dockerfile מתאים במקום להחליף מנהל חבילות אוטומטית.'})
-        command(target,['/usr/bin/env','npm','ci' if locked else 'install'],300)
+        command(target,['/usr/bin/env','npm','install' if policy=='install' or not locked else 'ci'],300)
         package=json.loads((target/'package.json').read_text())
         scripts=([BUILD_CONFIG.get('testScript'),BUILD_CONFIG.get('buildScript')] if BUILD_CONFIG else ['test','build'])
         for script in scripts:

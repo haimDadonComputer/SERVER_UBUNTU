@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Ubuntu Control public certificates
+After=network-online.target
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/opt/ubuntu-control-acme/bin/certbot renew --non-interactive --config-dir /etc/ubuntu-control-publication/certbot --work-dir /var/lib/ubuntu-control-helper/publication/acme-work --logs-dir /var/lib/ubuntu-control-helper/publication/acme-logs --deploy-hook "/usr/bin/bash /opt/ubuntu-control/scripts/reload-publication.sh"

@@ -106,11 +106,15 @@ export class ProjectUpdater {
                     return;
                 stage('עדכון אוטומטי: בונה ומפריס גרסה');
                 try {
-                    const record = await this.helper('project-activate', {
-                        project: p.id,
-                        expected: target,
-                        confirmed: true,
-                    });
+                    const record = await this.helper(
+                        'project-activate',
+                        {
+                            project: p.id,
+                            expected: target,
+                            confirmed: true,
+                        },
+                        stage
+                    );
                     this.db
                         .prepare('UPDATE projects SET lifecycle_json=? WHERE id=?')
                         .run(JSON.stringify(record), p.id);

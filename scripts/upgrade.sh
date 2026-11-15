@@ -24,6 +24,7 @@ done
 DATA_DIR=$(node --env-file=/etc/ubuntu-control/app.env -p 'require("path").resolve(process.env.DATA_DIR || "/var/lib/ubuntu-control")')
 [[ -d $DATA_DIR && -f $DATA_DIR/control.sqlite ]] || { echo 'Existing database not found; nothing changed'; exit 1; }
 check_idle() {
+  [[ ! -e /var/lib/ubuntu-control-helper/publication/pending.json ]] || { echo 'Publication recovery is pending; inspect the helper before upgrading'; return 1; }
   [[ ! -e /var/lib/ubuntu-control-helper/pending.json ]] || { echo 'Confirm/rollback the pending firewall change before upgrading'; return 1; }
   for transaction in /var/lib/ubuntu-control-helper/runtime-transactions/*.json; do
     [[ ! -f $transaction ]] || { echo 'A project operation or recovery is pending. Inspect the helper and finish recovery before upgrading.'; return 1; }
@@ -105,6 +106,8 @@ if [[ $BROKER_ACTIVE == active ]]; then systemctl stop ubuntu-control-github.ser
 check_idle
 cp -a /etc/ubuntu-control "$BACKUP_DIR/etc-ubuntu-control"
 cp -a /var/lib/ubuntu-control-helper "$BACKUP_DIR/helper-state"
+if [[ -d /etc/ubuntu-control-publication ]]; then cp -a /etc/ubuntu-control-publication "$BACKUP_DIR/publication-secrets"; fi
+if [[ -d /etc/nginx/ubuntu-control ]]; then cp -a /etc/nginx/ubuntu-control "$BACKUP_DIR/publication-proxy"; fi
 # Runtime units are regenerated from the root registry. Preserve their current
 # definitions for diagnosis; never convert/start/stop individual projects here.
 install -d -m 0700 "$BACKUP_DIR/managed-units"

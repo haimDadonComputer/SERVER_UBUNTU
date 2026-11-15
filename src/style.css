@@ -1566,3 +1566,28 @@ footer span:first-child {
 .project-card .commit-grid b {
     overflow-wrap: anywhere;
 }
+.jobs-drawer {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(560px, 100vw);
+    z-index: 80;
+    overflow: auto;
+    background: var(--surface);
+    color: var(--text);
+    padding: 24px;
+    box-shadow: 0 0 0 100vmax #0003;
+}
+.job-detail {
+    padding: 16px 0;
+    border-bottom: 1px solid #8893a544;
+    overflow-wrap: anywhere;
+}
+.job-detail.selected {
+    outline: 2px solid #4080ff;
+    padding: 12px;
+}
+.job-detail pre {
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+}

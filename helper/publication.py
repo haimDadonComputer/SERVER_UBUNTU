@@ -1,5 +1,6 @@
 """Typed, root-owned Nginx publication. Never accepts proxy text or executable paths."""
 import copy
+import hashlib
 import datetime
 import ipaddress
 import json
@@ -15,6 +16,9 @@ from diagnostics import OperationError
 
 NETWORK_LOCK=threading.RLock()
 DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[]}
+
+def valid_domain(value):
+    return isinstance(value,str) and len(value)<=253 and re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}',value)
 
 class Publication:
     def __init__(self,cfg,backend):
@@ -132,7 +136,8 @@ class Publication:
             restored=copy.deepcopy(data);restored.pop('challengePending',None)
             self.transaction(data,restored,{'challenge.conf':None})
     def challenge(self,data):
-        redirect=' if ($host = '+data['domain']+') { return 308 https://'+data['domain']+'$request_uri; }' if data.get('management') and data.get('domain') else ''
+        domains=([data['domain']] if data.get('management') and data.get('domain') else [])+[item['domain'] for item in data['projects'].values() if item.get('domain')]
+        redirect=''.join(' if ($host = '+domain+') { return 308 https://'+domain+'$request_uri; }' for domain in sorted(set(domains)))
         return 'server {\n listen '+data['ip']+':80;\n server_name _;\n location ^~ /.well-known/acme-challenge/ { root /var/lib/ubuntu-control-acme; }\n location / {'+redirect+' return 404; }\n}\n'
     def cert_path(self,kind):return self.acme/'certbot/live'/kind
     def certificate(self,kind,identifier,data,staging=False):
@@ -150,17 +155,17 @@ class Publication:
             latest=self.read();latest['certificates'][kind]={'status':'failed','checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()};self.save(latest);raise
         if not staging:
             data['certificates'][kind]={'status':'issued','checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
-    def proxy(self,data,port,upstream,tls,management=False,storage=()):
-        name=data['domain'] if management else data['ip']
+    def proxy(self,data,port,upstream,tls,management=False,storage=(),domain='',certificate_kind=None):
+        name=data['domain'] if management else domain or data['ip']
         lines=['server {',' listen '+data['ip']+':'+str(port)+(' ssl' if tls else '')+';',' server_name '+name+';']
         if tls:
-            cert=self.cert_path('management' if management else 'ip')
+            cert=self.cert_path(certificate_kind or ('management' if management else 'ip'))
             lines+=[' ssl_certificate '+str(cert/'fullchain.pem')+';',' ssl_certificate_key '+str(cert/'privkey.pem')+';',' ssl_protocols TLSv1.2 TLSv1.3;']
-        if management:lines+=[' if ($host != '+name+') { return 444; }']
+        if management or domain:lines+=[' if ($host != '+name+') { return 444; }']
         if not management:
             lines+=[' location ~* '+json.dumps(r'(^|/)(uploads?|shared|\.control-releases)(/|$)')+' { return 404; }']
             for path in storage:lines+=[' location ~* '+json.dumps('^/'+re.escape(path)+'(?:/|$)',ensure_ascii=False)+' { return 404; }']
-        lines+=[' location / {',' proxy_pass http://127.0.0.1:'+str(upstream)+';',' proxy_http_version 1.1;',' proxy_set_header Host $host;',' proxy_set_header X-Forwarded-Proto $scheme;',' proxy_set_header X-Forwarded-For $remote_addr;',' proxy_set_header Upgrade $http_upgrade;',' proxy_set_header Connection "upgrade";',' proxy_read_timeout 3600s;',' }','}']
+        lines+=[' location / {',' proxy_pass http://127.0.0.1:'+str(upstream)+';',' proxy_http_version 1.1;',' proxy_set_header Host $http_host;',' proxy_set_header X-Forwarded-Host $http_host;',' proxy_set_header X-Forwarded-Proto $scheme;',' proxy_set_header X-Forwarded-For $remote_addr;',' proxy_set_header Upgrade $http_upgrade;',' proxy_set_header Connection "upgrade";',' proxy_read_timeout 3600s;',' }','}']
         return '\n'.join(lines)+'\n'
     def refresh_storage(self,identifier,p):
         with NETWORK_LOCK:
@@ -169,12 +174,13 @@ class Publication:
             paths=sorted(set([*p.get('writableDirectories',[]),*Storage(Lifecycle(self.cfg,self.h),identifier).catalog()['paths']]))
             after=copy.deepcopy(before);item=after['projects'][identifier];item['storageDirectories']=paths
             name='project-'+Lifecycle(self.cfg,self.h).names(identifier)['key']+'.conf'
-            self.transaction(before,after,{name:self.proxy(after,item['port'],item['upstream'],item['https'],storage=paths)})
+            self.transaction(before,after,{name:self.proxy(after,item['port'],item['upstream'],item['https'],storage=paths,domain=item.get('domain',''),certificate_kind=item.get('certificate'))})
     def publish(self,identifier,args):
         before=self.read();data=copy.deepcopy(before)
         if args.get('confirmed') is not True:raise ValueError('Explicit publication confirmation required')
         if type(args.get('enabled'))!=bool or 'https' in args and type(args['https'])!=bool:raise ValueError('Invalid publication flags')
         management=identifier is None
+        domain=''
         if management:name='management.conf'
         else:
             life=Lifecycle(self.cfg,self.h);p=life.lookup(identifier,True);name='project-'+life.names(identifier)['key']+'.conf'
@@ -185,7 +191,7 @@ class Publication:
             if before==data:return self.status()
             self.ready();changes={name:None}
             if not data['projects'] and not data['management']:changes['challenge.conf']=None
-            elif management:changes['challenge.conf']=self.challenge(data)
+            else:changes['challenge.conf']=self.challenge(data)
             self.transaction(before,data,changes);return self.status()
         self.ready()
         emit('network-preflight','Checking public interface and firewall prerequisites')
@@ -206,7 +212,8 @@ class Publication:
                     'code':'MANAGEMENT_DNS_IP_MISMATCH','stage':'dns-resolution',
                     'stderr':'Domain: '+data['domain']+'; expected IPv4: '+data['ip']+'; resolved IPv4: '+', '.join(sorted(resolved)),
                     'hint':'תקנו את רשומת A של '+data['domain']+' כך שתצביע ל־'+data['ip']+', או תקנו את כתובת השרת בהגדרות. הפרסום לא הופעל.'})
-            port=443;upstream=3080;tls=True;previous=data['management']
+            if any(item.get('domain')==data['domain'] for item in data['projects'].values()):raise ValueError('Management domain is already used by a project')
+            port=443;upstream=3080;tls=True;previous=data['management'] or any(item['port']==443 for item in data['projects'].values())
         else:
             if p.get('lifecycle','active')!='active' or p.get('ownership')!='managed':raise ValueError('An active managed project is required')
             runtime=p.get('runtime',{})
@@ -227,9 +234,24 @@ class Publication:
                     else:owned=any(life.names(identifier)['unit'] in line.split('/') for line in pathlib.Path('/proc/'+str(row['pid'])+'/cgroup').read_text().splitlines())
                 except (OSError,KeyError):owned=False
                 if not owned:raise ValueError('The existing localhost listener does not belong to this managed project')
-            port=args.get('port',runtime['port']);upstream=runtime['port'];tls=args.get('https') is True;previous=identifier in data['projects']
-            if type(port)!=int or not 1024<=port<=65535 or port==3080 or port in self.cfg.get('protected_ports',[22,80,443,3080]):raise ValueError('Invalid or protected public port')
-            if any(key!=identifier and item['port']==port for key,item in data['projects'].items()):raise ValueError('Public port reserved by another project')
+            domain=args.get('domain','')
+            if domain:
+                if not valid_domain(domain):raise ValueError('Invalid project domain; enter a hostname without scheme, port or path')
+                if domain==data['domain'] or domain.endswith('.'+data['domain']) and data['domain']:raise ValueError('Project domain must be separate from the management hostname')
+                if any(key!=identifier and item.get('domain')==domain for key,item in data['projects'].items()):raise ValueError('Domain reserved by another project')
+                emit('dns-resolution','Checking '+domain)
+                try:resolved={row[4][0] for row in socket.getaddrinfo(domain,443,family=socket.AF_INET)}
+                except socket.gaierror:
+                    raise OperationError('לא ניתן לפתור את דומיין הפרויקט',{'code':'PROJECT_DNS_UNRESOLVED','stage':'dns-resolution','stderr':domain,'hint':'צרו רשומת A של '+domain+' אל '+data['ip']+' ונסו שוב לאחר עדכון DNS.'}) from None
+                if resolved!={data['ip']}:raise OperationError('דומיין הפרויקט אינו מצביע רק לשרת שהוגדר',{'code':'PROJECT_DNS_IP_MISMATCH','stage':'dns-resolution','stderr':domain+' → '+', '.join(sorted(resolved)),'hint':'הגדירו רשומת A יחידה אל '+data['ip']+'.'})
+                if before['projects'].get(identifier,{}).get('domain')!=domain:
+                    existing=self.h['run'](['/usr/sbin/nginx','-T'])
+                    if any(domain in names.split() for names in re.findall(r'\bserver_name\s+([^;]+);',existing)):raise ValueError('Domain already exists in Nginx configuration; existing site was not changed')
+            elif not isinstance(domain,str):raise ValueError('Invalid project domain')
+            port=443 if domain else args.get('port',runtime['port']);upstream=runtime['port'];tls=bool(domain) or args.get('https') is True
+            previous=(port==443 and before['management']) or any(item['port']==port for item in before['projects'].values())
+            if not domain and (type(port)!=int or not 1024<=port<=65535 or port==3080 or port in self.cfg.get('protected_ports',[22,80,443,3080])):raise ValueError('Invalid or protected public port')
+            if any(key!=identifier and item['port']==port and not (domain and item.get('domain')) for key,item in data['projects'].items()):raise ValueError('Public port reserved by another project')
         emit('port-check','Checking publication port '+str(port))
         self.listeners(data['ip'],port,previous)
         # Challenge listener is a shared managed resource, never take over an existing listener.
@@ -242,17 +264,20 @@ class Publication:
             self.transaction(before,bootstrap,{'challenge.conf':self.challenge(data)})
             before=self.read()
         try:
-            if tls:self.certificate('management' if management else 'ip',data['domain'] if management else data['ip'],data)
+            # Separate lineages keep the old domain certificate usable if a
+            # domain-change transaction rolls back after issuance.
+            certificate_kind='management' if management else 'project-'+life.names(identifier)['key']+'-'+hashlib.sha256(domain.encode()).hexdigest()[:12] if domain else 'ip'
+            if tls:self.certificate(certificate_kind,data['domain'] if management else domain or data['ip'],data)
         except Exception:
             if not challenge_ready:
                 failed=self.read();restored=copy.deepcopy(data);restored['certificates']=failed['certificates']
                 self.transaction(failed,restored,{'challenge.conf':None})
             raise
         if management:data['management']=True
-        else:data['projects'][identifier]={'enabled':True,'port':port,'https':tls,'upstream':upstream,'url':('https' if tls else 'http')+'://'+data['ip']+':'+str(port)+'/','externalReachability':'unverified'}
+        else:data['projects'][identifier]={'enabled':True,'port':port,'https':tls,'upstream':upstream,'domain':domain,'certificate':certificate_kind,'url':('https' if tls else 'http')+'://'+(domain if domain else data['ip']+':'+str(port))+'/','externalReachability':'unverified'}
         data.pop('challengePending',None)
-        changes={name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]))}
-        if management:changes['challenge.conf']=self.challenge(data)
+        changes={name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]),domain=domain,certificate_kind=certificate_kind)}
+        changes['challenge.conf']=self.challenge(data)
         try:self.transaction(before,data,changes)
         except Exception:
             if not challenge_ready and not (self.state/'pending.json').exists():self.clear_bootstrap()

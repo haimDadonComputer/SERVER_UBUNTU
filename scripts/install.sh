@@ -27,7 +27,7 @@ install -d -m 0755 -o root -g root /var/lib/ubuntu-control-projects
 install -d -m 0750 -o root -g ubuntu-projects /srv/ubuntu-projects
 install -d -m 0755 -o root -g root /opt/ubuntu-control
 # Copy only known source paths; never copy .env, data, Git credentials or node_modules.
-for entry in package.json package-lock.json tsconfig.json vite.config.ts playwright.config.ts index.html src server helper deploy scripts tests README.md INSTALL.md VALIDATION.md AGENTS.md TASKS.json; do
+for entry in package.json package-lock.json tsconfig.json vite.config.ts playwright.config.ts index.html src server helper deploy scripts tests integrations README.md INSTALL.md VALIDATION.md AGENTS.md TASKS.json; do
   cp -R -- "$SOURCE_DIR/$entry" /opt/ubuntu-control/
 done
 # Build dependencies can write only their own modules and build output, never the

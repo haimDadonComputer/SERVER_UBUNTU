@@ -46,7 +46,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
                 ip: '8.8.8.8',
                 domain: 'control.example.com',
                 email: 'admin@example.com',
-                management: action === 'network-management',
+                management: ['network-management', 'network-project'].includes(action),
                 projects: {},
             };
         if (action === 'project-records') return [record];
@@ -146,6 +146,36 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     await queue.tail;
     assert.ok(config.origins.includes('https://control.example.com'));
     assert.ok(config.origins.includes(config.origin));
+    assert.equal(
+        (
+            await request('/projects/demo/publication', 'POST', {
+                enabled: true,
+                confirmed: true,
+                domain: 'control.example.com',
+                password,
+            })
+        ).status,
+        400
+    );
+    response = await request('/projects/demo/publication', 'POST', {
+        enabled: true,
+        confirmed: true,
+        domain: 'forms.example.com',
+        port: 443,
+        https: true,
+        password,
+    });
+    assert.equal(response.status, 202);
+    await queue.tail;
+    assert.ok(
+        calls.some(
+            ([action, args]) =>
+                action === 'network-project' &&
+                args.domain === 'forms.example.com' &&
+                args.port === 443
+        )
+    );
+    assert.ok(!config.origins.includes('https://forms.example.com'));
     assert.equal(
         (
             await request(

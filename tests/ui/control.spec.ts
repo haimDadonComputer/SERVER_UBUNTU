@@ -443,6 +443,12 @@ test('project runtime, private environment metadata, console and archive restora
     );
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
+    await card.getByRole('button', { name: 'פרסום באינטרנט / HTTPS', exact: true }).click();
+    await dialog.getByLabel('דומיין לפרויקט (אופציונלי)').fill('forms.example.com');
+    await expect(dialog.getByLabel('פורט ציבורי')).toHaveValue('443');
+    await expect(dialog.getByLabel('פורט ציבורי')).toBeDisabled();
+    await expect(dialog.getByRole('checkbox', { name: 'HTTPS עם תעודה ציבורית' })).toBeChecked();
+    await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     expect(rootRecords.get('lifecycle-demo')?.runtime.storageDirectories).toEqual([
         'data',
         'public/nested/uploads',

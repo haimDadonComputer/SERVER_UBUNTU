@@ -38,7 +38,7 @@ PY
 }
 check_idle
 STAGE_DIR=$(mktemp -d /opt/.ubuntu-control-upgrade.XXXXXXXX)
-for entry in package.json package-lock.json tsconfig.json vite.config.ts playwright.config.ts index.html src server helper deploy scripts tests README.md INSTALL.md VALIDATION.md AGENTS.md TASKS.json; do
+for entry in package.json package-lock.json tsconfig.json vite.config.ts playwright.config.ts index.html src server helper deploy scripts tests integrations README.md INSTALL.md VALIDATION.md AGENTS.md TASKS.json; do
   cp -R -- "$SOURCE_DIR/$entry" "$STAGE_DIR/"
 done
 prepare_install_tree "$STAGE_DIR" ubuntu-control ubuntu-control

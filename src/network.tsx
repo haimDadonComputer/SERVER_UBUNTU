@@ -26,6 +26,7 @@ export function NetworkSettings({
         [https, setHttps] = useState(true),
         [confirmed, setConfirmed] = useState(false);
     const [networkJob, setNetworkJob] = useState<Data | null>(null);
+    const [domain, setDomain] = useState('');
     const busy = requestBusy || !!networkJob;
     useEffect(() => {
         if (!networkJob) return;
@@ -66,6 +67,7 @@ export function NetworkSettings({
                 if (p) {
                     setPort(p.port);
                     setHttps(p.https);
+                    setDomain(p.domain || '');
                 }
             })
             .catch((e) => setError(e.message));
@@ -135,25 +137,41 @@ export function NetworkSettings({
                         </a>
                     )}
                     <label>
+                        דומיין לפרויקט (אופציונלי)
+                        <input
+                            value={domain}
+                            onChange={(e) => setDomain(e.target.value.trim().toLowerCase())}
+                            placeholder="forms-prompt.haimdadon.co.il"
+                        />
+                    </label>
+                    {domain && (
+                        <p>
+                            נדרשת רשומת A אל {state?.ip}. הפרויקט יפורסם ב־https://{domain}/ בפורט
+                            443, בנפרד מדומיין הניהול.
+                        </p>
+                    )}
+                    <label>
                         פורט ציבורי
                         <input
                             type="number"
                             min="1024"
                             max="65535"
-                            value={port}
+                            value={domain ? 443 : port}
+                            disabled={!!domain}
                             onChange={(e) => setPort(Number(e.target.value))}
                         />
                     </label>
                     <label className="checkbox-label">
                         <input
                             type="checkbox"
-                            checked={https}
+                            checked={!!domain || https}
+                            disabled={!!domain}
                             onChange={(e) => setHttps(e.target.checked)}
                         />
                         HTTPS עם תעודה ציבורית
                     </label>
                     <p>
-                        ה־proxy יאזין ב־IP הציבורי בפורט {port} ויפנה ל־localhost:
+                        ה־proxy יאזין ב־IP הציבורי בפורט {domain ? 443 : port} ויפנה ל־localhost:
                         {project.runtime?.port || '—'}. הפרויקט צריך להיות מוגדר להאזנה מקומית.
                     </p>
                 </>
@@ -224,8 +242,9 @@ export function NetworkSettings({
                             void submit(`/projects/${project.id}/publication`, 'POST', {
                                 enabled: true,
                                 confirmed: true,
-                                port,
-                                https,
+                                port: domain ? 443 : port,
+                                https: !!domain || https,
+                                domain,
                             })
                         }
                     >

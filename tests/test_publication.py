@@ -5,6 +5,53 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_project_domain_shares_https_with_management_and_survives_storage_refresh(self):
+        with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            self.pub.publish(None,{'enabled':True,'confirmed':True})
+            management=self.pub.path('management.conf').read_text()
+            data=self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'forms.example.com'})
+        item=data['projects']['demo'];self.assertEqual(item['url'],'https://forms.example.com/');self.assertEqual(item['port'],443)
+        self.assertTrue(item['https']);self.assertNotEqual(item['certificate'],'management')
+        path=self.pub.path('project-'+__import__('hashlib').sha256(b'demo').hexdigest()[:16]+'.conf')
+        text=path.read_text();self.assertIn('server_name forms.example.com;',text)
+        self.assertIn('if ($host != forms.example.com)',text);self.assertIn(str(self.pub.cert_path(item['certificate'])/'fullchain.pem'),text)
+        self.assertIn('proxy_set_header Host $http_host;',text);self.assertIn('proxy_set_header X-Forwarded-Host $http_host;',text)
+        self.assertEqual(self.pub.path('management.conf').read_text(),management)
+        self.assertIn('return 308 https://forms.example.com',self.pub.path('challenge.conf').read_text())
+        self.pub.refresh_storage('demo',{**self.record,'writableDirectories':['data']})
+        self.assertIn(str(self.pub.cert_path(item['certificate'])/'fullchain.pem'),path.read_text());self.assertIn('server_name forms.example.com',path.read_text())
+        self.pub.publish('demo',{'enabled':False,'confirmed':True})
+        self.assertNotIn('forms.example.com',self.pub.path('challenge.conf').read_text())
+        self.assertEqual(self.pub.path('management.conf').read_text(),management)
+    def test_project_domain_rejects_management_aliases_injection_and_bad_dns(self):
+        before=self.pub.read()
+        with patch.object(self.pub,'interfaces'):
+            for domain in ('control.example.com','child.control.example.com','https://forms.example.com','forms.example.com;return 200','../etc'):
+                with self.assertRaises(ValueError):self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':domain})
+            with patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('1.1.1.1',443))]):
+                with self.assertRaises(ValueError) as caught:self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'forms.example.com'})
+                self.assertEqual(caught.exception.details['code'],'PROJECT_DNS_IP_MISMATCH')
+        self.assertEqual(self.pub.read(),before)
+    def test_domain_change_validation_failure_keeps_old_domain_certificate_and_proxy(self):
+        with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'forms.example.com'})
+            before=self.pub.read();cert=before['projects']['demo']['certificate'];failed=False
+            path=self.pub.path('project-'+__import__('hashlib').sha256(b'demo').hexdigest()[:16]+'.conf');old=path.read_text()
+            def run(argv,**kw):
+                nonlocal failed
+                if argv==['/usr/sbin/nginx','-t'] and 'server_name next.example.com' in path.read_text() and not failed:
+                    failed=True;raise ValueError('invalid domain proxy')
+                return 'certbot 5.4.0' if '--version' in argv else 'Status: inactive' if 'ufw' in argv[0] else ''
+            self.run.side_effect=run
+            with self.assertRaises(ValueError):self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'next.example.com'})
+        self.assertEqual(self.pub.read(),before);self.assertEqual(path.read_text(),old)
+        cert_calls=[call.args[0] for call in self.run.call_args_list if 'certonly' in call.args[0]]
+        self.assertNotEqual(cert_calls[-1][cert_calls[-1].index('--cert-name')+1],cert)
+    def test_domain_publication_does_not_take_over_an_existing_nginx_host(self):
+        self.run.side_effect=lambda argv,**kw:'server_name forms.example.com;' if '-T' in argv else 'Status: inactive' if 'ufw' in argv[0] else ''
+        with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            with self.assertRaises(ValueError):self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'forms.example.com'})
+        self.assertEqual(self.pub.read()['projects'],{})
     def test_privileged_bind_capability_is_scoped_to_publication_helper(self):
         root=pathlib.Path(__file__).resolve().parents[1]
         settings=(root/'deploy/publication-helper.conf').read_text().splitlines()

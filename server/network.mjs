@@ -41,16 +41,26 @@ export function registerNetwork({ app, db, helper, queue, reauth, config }) {
     const publish = z.object({
         enabled: z.boolean(),
         confirmed: z.literal(true),
-        port: z.number().int().min(1024).max(65535).optional(),
+        port: z.number().int().min(1).max(65535).optional(),
         https: z.boolean().default(false),
+        domain: z.string().trim().toLowerCase().max(253).default(''),
     });
     app.post('/api/projects/:project/publication', async (req, res) => {
         await reauth(req);
+        const input = publish.parse(req.body);
+        if (
+            input.domain &&
+            config.origins.some((origin) => {
+                const hostname = new URL(origin).hostname;
+                return input.domain === hostname || input.domain.endsWith('.' + hostname);
+            })
+        )
+            throw new Error('Project domain must be separate from management hostnames');
         enqueue(
             req,
             res,
             'network-project',
-            { project: req.project.id, ...publish.parse(req.body) },
+            { project: req.project.id, ...input },
             'project:' + req.project.id
         );
     });

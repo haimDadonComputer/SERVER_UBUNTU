@@ -30,6 +30,15 @@ class LifecycleTests(unittest.TestCase):
         for update in ({'script':'start;sudo reboot'},{'args':'npm start'},{'args':['x\nreboot']},{'entry':'../../etc/shadow','mode':'entry'},{'healthPath':'//evil.test'},{'port':22}):
             with self.assertRaises(ValueError):validate_runtime({**self.runtime,**update},options)
         self.assertEqual(validate_runtime({**self.runtime,'args':['--name','a b']},options)['args'],['--name','a b'])
+        self.assertEqual(validate_runtime(self.runtime,options)['listenAddress'],'127.0.0.1')
+        self.assertEqual(validate_runtime(self.runtime,options)['dependencyInstall'],'locked')
+        with self.assertRaises(ValueError):validate_runtime({**self.runtime,'listenAddress':'evil.test'},options)
+    def test_http_ownership_uses_netid_and_rejects_loopback_for_remote_access(self):
+        p=self.managed();self.backend['parse_ss']=helper_backend.parse_ss
+        self.run.return_value='tcp LISTEN 0 511 0.0.0.0:3000 0.0.0.0:* users:(("node",pid=4321,fd=20))'
+        with patch.object(pathlib.Path,'read_text',return_value='0::/system.slice/'+self.life.names('demo')['unit']+'\n'):
+            self.assertTrue(self.life.http_owned('demo',p));self.assertIn('-lntup',self.run.call_args.args[0])
+            p['runtime']['listenAddress']='0.0.0.0';self.run.return_value=self.run.return_value.replace('0.0.0.0:3000','127.0.0.1:3000');self.assertFalse(self.life.http_owned('demo',p))
     def test_env_patch_returns_names_only_blank_preserves_and_delete_is_explicit(self):
         self.managed();self.life.environment('demo',{'set':{'API_KEY':'private-random-value','PUBLIC_URL':'https://example.test'},'publicBuild':['PUBLIC_URL']})
         result=self.life.environment('demo',{'set':{'API_KEY':''},'unset':[]})

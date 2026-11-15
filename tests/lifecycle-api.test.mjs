@@ -79,9 +79,36 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
             body: body === undefined ? undefined : JSON.stringify(body),
         });
     assert.equal((await request('/projects/demo/env')).status, 401);
+    assert.equal((await request('/project-access')).status, 401);
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
+    assert.equal((await request('/project-access')).status, 200);
+    for (const url of [
+        'javascript:alert(1)',
+        'https://user:secret@example.test',
+        'http://lifecycle-test:9000/app',
+    ])
+        assert.equal((await request('/projects/demo/link', 'PATCH', { url })).status, 400);
+    assert.equal(
+        (
+            await request(
+                '/projects/demo/link',
+                'PATCH',
+                { url: 'http://192.0.2.10:3000/' },
+                { 'X-CSRF-Token': 'bad' }
+            )
+        ).status,
+        403
+    );
+    assert.equal(
+        (await request('/projects/demo/link', 'PATCH', { url: 'http://192.0.2.10:3000/' })).status,
+        200
+    );
+    assert.equal(
+        db.prepare('SELECT launch_url FROM projects WHERE id=?').get('demo').launch_url,
+        'http://192.0.2.10:3000/'
+    );
     assert.equal(
         (
             await request(
@@ -126,7 +153,11 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     response = await request('/projects/demo/runtime', 'PATCH', { runtime });
     assert.equal(response.status, 202);
     assert.equal((await request('/projects/demo/start', 'POST', { confirmed: true })).status, 409);
-    assert.equal((await request('/projects/demo/archive','POST',{confirmed:true,confirmName:'demo'})).status,409);
+    assert.equal(
+        (await request('/projects/demo/archive', 'POST', { confirmed: true, confirmName: 'demo' }))
+            .status,
+        409
+    );
     assert.equal(
         (await request('/projects/demo/env', 'PATCH', { password, set: { API_KEY: 'new-value' } }))
             .status,
@@ -134,6 +165,15 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     );
     release();
     await queue.tail;
+    const lifecycle = await (await request('/projects/demo/lifecycle')).json();
+    assert.equal(lifecycle.lastJob.resource, 'project:demo');
+    assert.equal(lifecycle.lastJob.status, 'done');
+    assert.equal(
+        JSON.parse(
+            db.prepare('SELECT lifecycle_json FROM projects WHERE id=?').get('demo').lifecycle_json
+        ).lastJob,
+        undefined
+    );
     assert.equal(
         (await request('/projects/demo/archive', 'POST', { confirmed: true, confirmName: 'wrong' }))
             .status,

@@ -11,6 +11,7 @@ import {
     X,
     Loader2,
     Save,
+    ExternalLink,
 } from 'lucide-react';
 import { ErrorDetails } from './diagnostics';
 type Data = Record<string, any>;
@@ -42,16 +43,18 @@ export function ProjectActions({
     project: p,
     api,
     refresh,
-    showJobs,
+    onQueued,
     console: openConsole,
     totpEnabled,
+    serverAddresses = [],
 }: {
     project: Data;
     api: Api;
     refresh: () => Promise<any>;
-    showJobs: () => void;
+    onQueued: () => void;
     console: (id: string) => void;
     totpEnabled: boolean;
+    serverAddresses?: Data[];
 }) {
     const [modal, setModal] = useState(''),
         [busy, setBusy] = useState(false),
@@ -60,6 +63,16 @@ export function ProjectActions({
         [typed, setTyped] = useState(''),
         [password, setPassword] = useState(''),
         [code, setCode] = useState('');
+    const [launchUrl, setLaunchUrl] = useState(p.launch_url || '');
+    const address = serverAddresses.find((a) => a.address !== location.hostname)?.address;
+    const automaticUrl =
+        p.runtime?.health === 'http' &&
+        p.runtime?.listenAddress === '0.0.0.0' &&
+        p.runtime?.port &&
+        address
+            ? `http://${address}:${p.runtime.port}/`
+            : '';
+    const projectUrl = p.launch_url || automaticUrl;
     async function action(path: string, method = 'POST', body: Data = { confirmed: true }) {
         if (busy) return;
         setBusy(true);
@@ -68,7 +81,7 @@ export function ProjectActions({
             const result = await api(`/projects/${p.id}/` + path, method, body);
             setModal('');
             await refresh();
-            if (result.job) showJobs();
+            if (result.job) onQueued();
         } catch (e) {
             setError((e as Error).message);
             setDetails((e as Data).details);
@@ -101,6 +114,31 @@ export function ProjectActions({
                     </>
                 ) : (
                     <>
+                        {projectUrl ? (
+                            <a
+                                className="button secondary"
+                                href={projectUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                            >
+                                <ExternalLink size={14} />
+                                כניסה לפרויקט
+                            </a>
+                        ) : (
+                            <button className="secondary" onClick={() => setModal('link')}>
+                                <ExternalLink size={14} />
+                                כניסה לפרויקט
+                            </button>
+                        )}
+                        <button
+                            className="text-btn"
+                            onClick={() => {
+                                setLaunchUrl(projectUrl);
+                                setModal('link');
+                            }}
+                        >
+                            כתובת פתיחה
+                        </button>
                         <button className="secondary" onClick={() => setModal('runtime')}>
                             <Settings size={14} />
                             הגדרות הפעלה
@@ -226,11 +264,67 @@ export function ProjectActions({
                     saved={async () => {
                         setModal('');
                         await refresh();
-                        showJobs();
+                        onQueued();
                     }}
                 />
             )}
-            {modal && modal !== 'runtime' && (
+            {modal === 'link' && (
+                <Popup title="כתובת פתיחת הפרויקט" onClose={() => setModal('')}>
+                    <p className="muted">
+                        בחרו IP של השרת ופורט, או הזינו כתובת מותאמת. כדי לגשת דרך IP יש לבחור
+                        בהגדרות ההפעלה האזנה דרך כתובת השרת. חומת האש אינה משתנה אוטומטית.
+                    </p>
+                    <form
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            void action('link', 'PATCH', { url: launchUrl });
+                        }}
+                    >
+                        {serverAddresses.length > 0 && (
+                            <label>
+                                IP של השרת
+                                <select
+                                    defaultValue=""
+                                    onChange={(e) => {
+                                        if (e.target.value)
+                                            setLaunchUrl(
+                                                `http://${e.target.value}:${p.runtime?.port || p.health_port || 3000}/`
+                                            );
+                                    }}
+                                >
+                                    <option value="">בחירת IP</option>
+                                    {serverAddresses.map((a) => (
+                                        <option key={a.address} value={a.address}>
+                                            {a.address} ({a.interface})
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
+                        <label>
+                            כתובת האפליקציה
+                            <input
+                                type="url"
+                                dir="ltr"
+                                placeholder="http://SERVER_IP:3000"
+                                value={launchUrl}
+                                onChange={(e) => setLaunchUrl(e.target.value)}
+                            />
+                        </label>
+                        {p.runtime && p.runtime.listenAddress !== '0.0.0.0' && (
+                            <p className="alert warning">
+                                הפרויקט מוגדר כרגע ל־localhost בלבד. שמירת קישור אינה פותחת גישה
+                                מרחוק; יש לשנות את ההאזנה בהגדרות ההפעלה ולהפעיל את הפרויקט.
+                            </p>
+                        )}
+                        {error && <div className="alert error">{error}</div>}
+                        <button className="primary" disabled={busy}>
+                            שמירת כתובת
+                        </button>
+                    </form>
+                </Popup>
+            )}
+            {modal && modal !== 'runtime' && modal !== 'link' && (
                 <Popup
                     title={
                         {
@@ -387,6 +481,8 @@ function RuntimeEditor({
                 autostart: false,
                 testScript: '',
                 buildScript: '',
+                dependencyInstall: 'locked',
+                listenAddress: '127.0.0.1',
                 internalPort: 3000,
                 dataPath: '/app/shared',
             }
@@ -457,6 +553,32 @@ function RuntimeEditor({
                     </label>
                     {runtime.kind === 'node' ? (
                         <>
+                            <label>
+                                התקנת תלויות
+                                <select
+                                    value={runtime.dependencyInstall || 'locked'}
+                                    onChange={(e) => set('dependencyInstall', e.target.value)}
+                                >
+                                    <option value="locked">npm ci — דורש קובץ נעילה</option>
+                                    <option value="allow-install">
+                                        npm install כאשר אין קובץ נעילה
+                                    </option>
+                                </select>
+                            </label>
+                            {!(options.lockfiles || []).some((f: string) =>
+                                ['package-lock.json', 'npm-shrinkwrap.json'].includes(f)
+                            ) && (
+                                <p className="alert warning">
+                                    לא נמצא קובץ נעילה של npm בתיקיית המקור. אפשר להוסיף
+                                    package-lock.json למאגר, או לבחור במפורש npm install. ההתקנה
+                                    תיצור קובץ נעילה רק בגרסת ההרצה ולא תדחוף שינויים ל־GitHub.
+                                    {(options.lockfiles || []).length > 0
+                                        ? ' זוהו קובצי נעילה אחרים: ' +
+                                          options.lockfiles.join(', ') +
+                                          '. בפרויקט המשתמש במנהל חבילות אחר מומלץ Dockerfile שמתקין באמצעותו.'
+                                        : ''}
+                                </p>
+                            )}
                             <label>
                                 דרך הפעלה
                                 <select
@@ -555,7 +677,7 @@ function RuntimeEditor({
                         </select>
                     </label>
                     <label>
-                        פורט בשרת (localhost בלבד)
+                        פורט בשרת
                         <input
                             aria-label="פורט הפעלה"
                             type="number"
@@ -576,6 +698,22 @@ function RuntimeEditor({
                                 onChange={(e) => set('healthPath', e.target.value)}
                             />
                         </label>
+                    )}
+                    <label className="checkbox-label">
+                        <input
+                            type="checkbox"
+                            checked={runtime.listenAddress === '0.0.0.0'}
+                            onChange={(e) =>
+                                set('listenAddress', e.target.checked ? '0.0.0.0' : '127.0.0.1')
+                            }
+                        />
+                        גישה דרך IP ופורט של השרת
+                    </label>
+                    {runtime.listenAddress === '0.0.0.0' && (
+                        <p className="alert warning">
+                            השירות יאזין בכל ממשקי IPv4, כולל כתובת ציבורית אם קיימת. חומת האש לא
+                            תשתנה. בקוד Node יש להשתמש בערך HOST שמועבר לשירות.
+                        </p>
                     )}
                     <label className="checkbox-label">
                         <input
@@ -800,6 +938,8 @@ export function ProjectConsole({
     records,
     error,
     gap,
+    connected,
+    jobs,
 }: {
     project: Data;
     api: Api;
@@ -808,33 +948,89 @@ export function ProjectConsole({
     records: Data[];
     error: string;
     gap: string;
+    connected: boolean;
+    jobs: Data[];
 }) {
     const [query, setQuery] = useState(''),
         [paused, setPaused] = useState(false),
         [cleared, setCleared] = useState(0),
-        [history, setHistory] = useState<Data[]>([]);
+        [history, setHistory] = useState<Data[]>([]),
+        [snapshot, setSnapshot] = useState<Data>(project),
+        [historyError, setHistoryError] = useState(''),
+        [historyDetails, setHistoryDetails] = useState<Data | null>(null),
+        [stateError, setStateError] = useState(''),
+        [reading, setReading] = useState(true),
+        [reload, setReload] = useState(0);
     const box = useRef<HTMLPreElement | null>(null);
+    const connection = useRef(connected);
+    connection.current = connected;
     useEffect(() => {
         let live = true;
-        api(`/projects/${project.id}/logs`)
-            .then((data) => {
+        let busy = false;
+        async function readHistory(initial = false) {
+            try {
+                const data = await api(`/projects/${project.id}/logs`);
                 if (live) {
                     setHistory(data);
-                    subscribe(project.id, data.at(-1)?.cursor);
+                    setHistoryError('');
+                    setHistoryDetails(null);
+                    if (initial) subscribe(project.id, data.at(-1)?.cursor);
                 }
-            })
-            .catch(() => {
-                if (live) subscribe(project.id);
-            });
+            } catch (e) {
+                if (live) {
+                    setHistoryError((e as Error).message);
+                    setHistoryDetails((e as Data).details || null);
+                    if (initial) subscribe(project.id);
+                }
+            } finally {
+                if (live) setReading(false);
+            }
+        }
+        async function state() {
+            try {
+                const data = await api(`/projects/${project.id}/lifecycle`);
+                if (live) {
+                    setSnapshot(data);
+                    setStateError('');
+                }
+            } catch (e) {
+                if (live) setStateError((e as Error).message);
+            }
+        }
+        setReading(true);
+        setHistory([]);
+        busy = true;
+        void Promise.all([readHistory(true), state()]).finally(() => {
+            busy = false;
+        });
+        const timer = setInterval(async () => {
+            if (document.hidden || busy) return;
+            busy = true;
+            try {
+                await Promise.all([state(), ...(!connection.current ? [readHistory()] : [])]);
+            } finally {
+                busy = false;
+            }
+        }, 5000);
+        /* History is useful even when a proxy cannot establish WebSocket. */
         return () => {
             live = false;
+            clearInterval(timer);
             unsubscribe();
         };
-    }, [project.id]);
+    }, [project.id, reload]);
     useEffect(() => {
         if (!paused && box.current) box.current.scrollTop = box.current.scrollHeight;
     }, [records, history, paused]);
+    useEffect(() => {
+        if (records.length) {
+            setHistoryError('');
+            setHistoryDetails(null);
+        }
+    }, [records]);
     const all = [...history, ...records];
+    const activity = snapshot.lastJob || jobs.find((j) => j.resource === 'project:' + project.id);
+    const active = snapshot.observed?.active;
     const seen = new Set();
     const lines = all
         .filter((r) => {
@@ -855,7 +1051,9 @@ export function ProjectConsole({
                     <Terminal size={18} />
                     קונסול · {project.name}
                 </h2>
-                <span className="badge">צפייה בלבד</span>
+                <span className="badge">
+                    {connected ? 'חיבור חי' : 'עדכון דרך HTTP כל 5 שניות'} · צפייה בלבד
+                </span>
             </div>
             <div className="toolbar">
                 <label className="search">
@@ -872,6 +1070,9 @@ export function ProjectConsole({
                 <button className="secondary" onClick={() => setCleared(Date.now())}>
                     ניקוי תצוגה
                 </button>
+                <button className="secondary" onClick={() => setReload((v) => v + 1)}>
+                    רענון קונסול
+                </button>
                 <a
                     className="button secondary"
                     href={`/api/projects/${project.id}/logs/download?q=${encodeURIComponent(query)}`}
@@ -880,6 +1081,43 @@ export function ProjectConsole({
                 </a>
             </div>
             {error && <div className="alert error">{error}</div>}
+            {historyError && (
+                <div className="alert error">
+                    <div>
+                        {historyError}
+                        <ErrorDetails details={historyDetails} />
+                    </div>
+                </div>
+            )}
+            {stateError && (
+                <div className="alert warning">לא ניתן לבדוק את מצב השירות: {stateError}</div>
+            )}
+            <p className="muted">
+                מצב השירות:{' '}
+                {active === 'active'
+                    ? 'פעיל'
+                    : active === 'inactive'
+                      ? 'כבוי'
+                      : active === 'failed'
+                        ? 'נכשל'
+                        : active === 'unmanaged'
+                          ? 'טרם הוגדר'
+                          : active || 'בודק…'}
+            </p>
+            {activity && ['queued', 'running'].includes(activity.status) && (
+                <p className="alert warning">
+                    פעולה מתבצעת ברקע: {activity.stage}. פלט האפליקציה יופיע לאחר שתתחיל לרוץ.
+                </p>
+            )}
+            {activity?.status === 'failed' && (
+                <div className="alert error">
+                    <div>
+                        <strong>פעולת הפרויקט נכשלה</strong>
+                        <p>{activity.error}</p>
+                        <ErrorDetails details={activity.details} jobId={activity.id} />
+                    </div>
+                </div>
+            )}
             {gap && <div className="alert warning">{gap}</div>}
             <pre className="console" ref={box}>
                 {lines.length
@@ -888,7 +1126,15 @@ export function ProjectConsole({
                               {r.time} [{r.level}] {r.text}
                           </div>
                       ))
-                    : 'ממתין ללוגים מהפרויקט…'}
+                    : reading
+                      ? 'טוען היסטוריית לוגים…'
+                      : all.length
+                        ? 'אין הודעות התואמות לתצוגה ולחיפוש.'
+                        : active === 'active'
+                          ? 'השירות פעיל, אך עדיין לא נרשם פלט stdout/stderr.'
+                          : activity?.status === 'failed'
+                            ? 'האפליקציה לא עלתה. סיבת הכשל ופרטי הפריסה מוצגים למעלה.'
+                            : 'אין כרגע פלט מהאפליקציה. הגדירו והפעילו את הפרויקט כדי לקבל לוגים.'}
             </pre>
         </section>
     );

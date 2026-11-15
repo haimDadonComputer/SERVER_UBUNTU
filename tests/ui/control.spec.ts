@@ -34,12 +34,23 @@ test.beforeAll(async () => {
         },
         helper: async (action: string, args: any) => {
             if (action === 'project-records') return [...rootRecords.values()];
+            if (action === 'project-state')
+                return {
+                    ...rootRecords.get(args.project),
+                    observed: {
+                        active:
+                            rootRecords.get(args.project)?.desired === 'running'
+                                ? 'active'
+                                : 'inactive',
+                    },
+                };
             if (action === 'project-options')
                 return {
                     scripts: ['start', 'build'],
                     entries: ['index.mjs'],
                     git: false,
                     dockerfile: false,
+                    lockfiles: [],
                 };
             if (action === 'project-env-meta')
                 return {
@@ -274,7 +285,7 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await page.getByRole('checkbox').check();
     await page.getByRole('dialog').screenshot({ path: 'test-results/github-import.png' });
     await page.getByRole('button', { name: 'ייבוא המאגר', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'משימות רקע', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
     await expect
         .poll(async () =>
             fs.readFile(path.join(dir, 'private-app', 'README.txt'), 'utf8').catch(() => '')
@@ -325,6 +336,9 @@ test('project runtime, private environment metadata, console and archive restora
 }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
+    await page.route('**/api/project-access', (route) =>
+        route.fulfill({ json: { addresses: [{ address: '192.0.2.20', interface: 'tailscale0' }] } })
+    );
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(base);
     await page.locator('input[name=username]').fill('test-admin');
@@ -341,11 +355,25 @@ test('project runtime, private environment metadata, console and archive restora
     await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
-    await dialog.getByLabel('בדיקת תקינות').selectOption('process');
+    await dialog.getByLabel('בדיקת תקינות').selectOption('http');
+    await dialog.getByLabel('התקנת תלויות').selectOption('allow-install');
+    await dialog.getByRole('checkbox', { name: 'גישה דרך IP ופורט של השרת' }).check();
     await page.screenshot({ path: 'test-results/project-runtime.png', fullPage: true });
     await dialog.getByRole('button', { name: 'שמירת הגדרות הפעלה' }).click();
+    await expect(page.getByRole('heading', { name: 'הפרויקטים שלי', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
+    await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
+        'href',
+        'http://192.0.2.20:3000/'
+    );
+    await card.getByRole('button', { name: 'כתובת פתיחה', exact: true }).click();
+    await dialog.getByLabel('כתובת האפליקציה').fill('http://192.0.2.10:3000/');
+    await dialog.getByRole('button', { name: 'שמירת כתובת' }).click();
+    await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
+        'href',
+        'http://192.0.2.10:3000/'
+    );
     await card.getByRole('button', { name: 'משתני סביבה', exact: true }).click();
     await dialog.getByRole('button', { name: 'הוספת משתנה' }).click();
     await dialog.getByLabel('שם משתנה 0').fill('API_KEY');
@@ -357,6 +385,41 @@ test('project runtime, private environment metadata, console and archive restora
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await card.getByRole('button', { name: 'קונסול הפרויקט', exact: true }).click();
     await expect(page.getByText('filtered runtime log')).toBeVisible();
+    await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    db.prepare(
+        "INSERT INTO jobs(id,resource,status,error,error_details) VALUES(?,?,'failed',?,?)"
+    ).run(
+        'missing-lockfile-ui',
+        'project:lifecycle-demo',
+        'חסר קובץ נעילת תלויות של npm',
+        JSON.stringify({
+            code: 'NPM_LOCKFILE_MISSING',
+            stage: 'dependency-install',
+            hint: 'הוסיפו package-lock.json או בחרו npm install',
+        })
+    );
+    let logReads = 0;
+    await page.route('**/api/projects/lifecycle-demo/logs', (route) =>
+        route.fulfill({
+            json:
+                logReads++ === 0
+                    ? []
+                    : [
+                          {
+                              cursor: 's=fallback',
+                              time: new Date().toISOString(),
+                              level: 'info',
+                              text: 'HTTP fallback log',
+                          },
+                      ],
+        })
+    );
+    await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
+    await card.getByRole('button', { name: 'קונסול הפרויקט', exact: true }).click();
+    await expect(page.getByText('חסר קובץ נעילת תלויות של npm', { exact: true })).toBeVisible();
+    await expect(page.getByText('ממתין ללוגים מהפרויקט…', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('HTTP fallback log')).toBeVisible({ timeout: 10000 });
+    await page.screenshot({ path: 'test-results/project-console-fallback.png', fullPage: true });
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
     await card.getByRole('button', { name: 'העברה לארכיון', exact: true }).click();
     await dialog.getByLabel('להמשך הקלידו lifecycle-demo').fill('lifecycle-demo');

@@ -38,5 +38,15 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,patch.object(r,'status',return_value={'dirty':True}),patch.object(r,'fetch') as fetch:
             with self.assertRaises(ValueError):r.execute(pathlib.Path(d),'pull',[])
             fetch.assert_not_called()
+    def test_missing_lockfile_has_actionable_diagnostic_without_installing(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,'BUILD_CONFIG',{'kind':'node'}),patch.object(r,'command') as command:
+            root=pathlib.Path(d);(root/'package.json').write_text('{"scripts":{}}')
+            with self.assertRaises(r.OperationError) as error:r.build_target(root,root)
+            self.assertEqual(error.exception.details['code'],'NPM_LOCKFILE_MISSING');command.assert_not_called()
+    def test_explicit_install_fallback_only_changes_release_and_locked_projects_keep_ci(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(r,'BUILD_CONFIG',{'kind':'node','dependencyInstall':'allow-install'}),patch.object(r,'command') as command:
+            root=pathlib.Path(d);target=root/'release';target.mkdir();(target/'package.json').write_text('{"scripts":{}}')
+            r.build_target(root,target);self.assertEqual(command.call_args.args[:2],(target,['/usr/bin/env','npm','install']));self.assertFalse((root/'package-lock.json').exists())
+            (target/'npm-shrinkwrap.json').write_text('{}');r.build_target(root,target);self.assertEqual(command.call_args.args[1],['/usr/bin/env','npm','ci'])
 
 if __name__=='__main__':unittest.main()

@@ -100,6 +100,7 @@ function App() {
         [metrics, setMetrics] = useState<Any>({}),
         [inv, setInv] = useState<Any>({ ports: [], services: [] }),
         [projects, setProjects] = useState<Any[]>([]),
+        [serverAddresses, setServerAddresses] = useState<Any[]>([]),
         [archivedProjects, setArchivedProjects] = useState<Any[]>([]),
         [showArchived, setShowArchived] = useState(false),
         [envProject, setEnvProject] = useState<Any | null>(null),
@@ -228,6 +229,7 @@ function App() {
             api('/jobs'),
             api('/settings'),
             api('/projects?state=archived'),
+            api('/project-access'),
         ]);
         if (results[0].status === 'fulfilled') setMetrics(results[0].value);
         if (results[1].status === 'fulfilled') setInv(results[1].value);
@@ -242,6 +244,7 @@ function App() {
         if (results[3].status === 'fulfilled') setJobs(results[3].value);
         if (results[4].status === 'fulfilled') setSettings(results[4].value);
         if (results[5].status === 'fulfilled') setArchivedProjects(results[5].value);
+        if (results[6].status === 'fulfilled') setServerAddresses(results[6].value.addresses || []);
     }
     useEffect(() => {
         if (!user) return;
@@ -1228,7 +1231,9 @@ function App() {
                                                     projects={projects}
                                                     onDone={() => {
                                                         setModal(null);
-                                                        setPage('jobs');
+                                                        setNotice(
+                                                            'הייבוא נוסף לתור ויתבצע ברקע. אפשר להמשיך לעבוד כאן.'
+                                                        );
                                                         void refresh();
                                                     }}
                                                 />
@@ -1289,7 +1294,12 @@ function App() {
                                                 project={p}
                                                 api={api}
                                                 refresh={refresh}
-                                                showJobs={() => setPage('jobs')}
+                                                onQueued={() =>
+                                                    setNotice(
+                                                        'הפעולה נוספה לתור ותתבצע ברקע. אפשר להמשיך לעבוד כאן.'
+                                                    )
+                                                }
+                                                serverAddresses={serverAddresses}
                                                 console={openProjectConsole}
                                                 totpEnabled={!!user.totpEnabled}
                                             />
@@ -1609,6 +1619,8 @@ function App() {
                             records={projectLogs}
                             error={projectLogError}
                             gap={projectLogGap}
+                            connected={connected}
+                            jobs={jobs}
                         />
                     )}
                     {page === 'console' && (
@@ -1679,7 +1691,12 @@ function App() {
                                 }
                                 api={api}
                                 refresh={refresh}
-                                showJobs={() => setPage('jobs')}
+                                onQueued={() =>
+                                    setNotice(
+                                        'הפעולה נוספה לתור ותתבצע ברקע. אפשר להמשיך לעבוד כאן.'
+                                    )
+                                }
+                                serverAddresses={serverAddresses}
                                 console={openProjectConsole}
                                 totpEnabled={!!user.totpEnabled}
                             />

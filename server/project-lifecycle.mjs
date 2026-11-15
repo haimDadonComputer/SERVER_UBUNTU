@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { audit } from './db.mjs';
+import { networkInterfaces } from 'node:os';
+import { storedDetails } from './diagnostics.mjs';
 export function projectView(row) {
     let state = {};
     try {
@@ -36,10 +38,26 @@ const runtime = z.object({
     autostart: z.boolean().default(false),
     testScript: z.string().max(80).default(''),
     buildScript: z.string().max(80).default(''),
+    dependencyInstall: z.enum(['locked', 'allow-install']).default('locked'),
+    listenAddress: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
     internalPort: z.number().int().min(1).max(65535).optional(),
     dataPath: z.string().max(200).optional(),
 });
-export function registerLifecycle({ app, db, helper, queue, reauth }) {
+export function registerLifecycle({ app, db, helper, queue, reauth, origin }) {
+    app.get('/api/project-access', (_req, res) => {
+        const addresses = Object.entries(networkInterfaces()).flatMap(([name, items]) =>
+            (items || [])
+                .filter((i) => !i.internal && i.family === 'IPv4')
+                .map((i) => ({ address: i.address, interface: name }))
+        );
+        if (origin && new URL(origin).hostname.endsWith('.ts.net'))
+            addresses.sort(
+                (a, b) =>
+                    Number(b.interface.startsWith('tailscale')) -
+                    Number(a.interface.startsWith('tailscale'))
+            );
+        res.json({ addresses });
+    });
     const save = (record) => {
         if (record?.id)
             db.prepare('UPDATE projects SET lifecycle_json=? WHERE id=?').run(
@@ -62,7 +80,14 @@ export function registerLifecycle({ app, db, helper, queue, reauth }) {
     app.get('/api/projects/:project/lifecycle', async (req, res) => {
         const state = await helper('project-state', { project: req.project.id });
         save(state);
-        res.json(state);
+        const job = db
+            .prepare('SELECT * FROM jobs WHERE resource=? ORDER BY rowid DESC LIMIT 1')
+            .get('project:' + req.project.id);
+        const { error_details, ...lastJob } = job || {};
+        res.json({
+            ...state,
+            lastJob: job ? { ...lastJob, details: storedDetails(error_details) } : null,
+        });
     });
     app.get('/api/projects/:project/options', async (req, res) =>
         res.json(await helper('project-options', { project: req.project.id }))
@@ -94,6 +119,26 @@ export function registerLifecycle({ app, db, helper, queue, reauth }) {
             .object({ runtime, replaceExternal: z.boolean().optional() })
             .parse(req.body);
         enqueue(req, res, 'project-runtime', input);
+    });
+    app.patch('/api/projects/:project/link', async (req, res) => {
+        const input = z.object({ url: z.string().trim().max(2048) }).parse(req.body);
+        let value = '';
+        if (input.url) {
+            const url = new URL(input.url);
+            if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+                throw new Error('נדרשת כתובת HTTP/HTTPS ללא פרטי התחברות');
+            if (
+                origin &&
+                url.hostname.replace(/\.$/, '') === new URL(origin).hostname.replace(/\.$/, '')
+            )
+                throw new Error(
+                    'יש להשתמש בשם מארח נפרד מממשק הניהול כדי לא להעביר לאפליקציה את עוגיות ההתחברות'
+                );
+            value = url.href;
+        }
+        db.prepare('UPDATE projects SET launch_url=? WHERE id=?').run(value, req.project.id);
+        audit(db, req.session.username, 'project-link', req.project.id);
+        res.json({ url: value });
     });
     app.patch('/api/projects/:project/updates', async (req, res) => {
         const input = z.object({ mode: z.enum(['manual', 'auto']) }).parse(req.body);

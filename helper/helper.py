@@ -409,7 +409,7 @@ def project_run(cfg, p, args, timeout=30):
     env=['/usr/bin/env','UC_EXPECTED_REPO='+(p.get('repo') or ''),'UC_EXPECTED_BRANCH='+(p.get('branch') or 'main')]
     credential_input=None
     if p.get('ownership')=='managed':
-        runtime=p['runtime'];env+=['UC_RUNTIME_BUILD='+json.dumps({'kind':runtime['kind'],'mode':runtime.get('mode'),'testScript':runtime.get('testScript',''),'buildScript':runtime.get('buildScript',''),'skipDocker':True})]
+        runtime=p['runtime'];env+=['UC_RUNTIME_BUILD='+json.dumps({'kind':runtime['kind'],'mode':runtime.get('mode'),'dependencyInstall':runtime.get('dependencyInstall','locked'),'testScript':runtime.get('testScript',''),'buildScript':runtime.get('buildScript',''),'skipDocker':True})]
     if args[0] in ('deploy','snapshot'):
         values=Lifecycle(cfg,globals()).metadata_values(p)
         credential_input=json.dumps({'build_env':values})+'\n';env+=['UC_RUNNER_INPUT=1']

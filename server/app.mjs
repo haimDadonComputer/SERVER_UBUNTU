@@ -410,7 +410,7 @@ export async function createApp({ db, config, helper }) {
             return res.status(409).json({ error: 'הפרויקט בארכיון. יש לשחזר אותו תחילה.' });
         next();
     });
-    registerLifecycle({ app, db, helper, queue, reauth });
+    registerLifecycle({ app, db, helper, queue, reauth, origin: config.origin });
     app.get('/api/projects/:project/qr', async (req, res) =>
         res.json(await helper('project-qr', { project: req.project.id }))
     );
@@ -507,7 +507,7 @@ export async function createApp({ db, config, helper }) {
     app.get('/api/jobs', (_req, res) =>
         res.json(
             db
-                .prepare('SELECT * FROM jobs ORDER BY created DESC LIMIT 50')
+                .prepare('SELECT * FROM jobs ORDER BY created DESC,rowid DESC LIMIT 50')
                 .all()
                 .map(({ error_details, ...row }) => ({
                     ...row,

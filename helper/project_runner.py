@@ -72,14 +72,17 @@ def options(root):
             if f.suffix in ('.js','.mjs','.cjs') and not f.is_symlink():entries.append(f.relative_to(root).as_posix())
             if len(entries)>=800:break
         if len(entries)>=800:break
-    return {'scripts':sorted(k for k in package.get('scripts',{}) if re.fullmatch(r'[A-Za-z0-9:_-]{1,80}',k)),'entries':sorted(entries),'dockerfile':(root/'Dockerfile').is_file() and not (root/'Dockerfile').is_symlink(),'git':(root/'.git').exists()}
+    return {'scripts':sorted(k for k in package.get('scripts',{}) if re.fullmatch(r'[A-Za-z0-9:_-]{1,80}',k)),'entries':sorted(entries),'dockerfile':(root/'Dockerfile').is_file() and not (root/'Dockerfile').is_symlink(),'git':(root/'.git').exists(),'lockfiles':[name for name in ('package-lock.json','npm-shrinkwrap.json','pnpm-lock.yaml','yarn.lock','bun.lock','bun.lockb') if (root/name).is_file() and not (root/name).is_symlink()]}
 
 def build_target(root,target):
     kind=BUILD_CONFIG.get('kind')
     if kind=='docker' and BUILD_CONFIG.get('skipDocker'):return
     if (target/'package.json').exists() and kind!='docker':
-        if not (target/'package-lock.json').exists():raise ValueError('Node projects require package-lock.json')
-        command(target,['/usr/bin/env','npm','ci'],300)
+        if any((target/name).is_symlink() for name in ('package-lock.json','npm-shrinkwrap.json')):raise ValueError('Symlink lockfiles are prohibited')
+        locked=any((target/name).is_file() for name in ('package-lock.json','npm-shrinkwrap.json'))
+        if not locked and BUILD_CONFIG.get('dependencyInstall','locked')!='allow-install':
+            raise OperationError('חסר קובץ נעילת תלויות של npm',{'code':'NPM_LOCKFILE_MISSING','stage':'dependency-install','cwd':str(target),'stderr':'Node projects require package-lock.json or npm-shrinkwrap.json for npm ci','hint':'הוסיפו package-lock.json למאגר, או בחרו במפורש בהגדרות ההפעלה npm install כאשר אין קובץ נעילה. אם הפרויקט משתמש ב־pnpm/yarn/bun, השתמשו ב־Dockerfile מתאים במקום להחליף מנהל חבילות אוטומטית.'})
+        command(target,['/usr/bin/env','npm','ci' if locked else 'install'],300)
         package=json.loads((target/'package.json').read_text())
         scripts=([BUILD_CONFIG.get('testScript'),BUILD_CONFIG.get('buildScript')] if BUILD_CONFIG else ['test','build'])
         for script in scripts:

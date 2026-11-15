@@ -46,6 +46,7 @@ test('GitHub schema migration preserves existing projects and settings', async (
     assert.equal(p.github_repository_id, null);
     assert.equal(p.lifecycle_json, '{}');
     assert.equal(p.update_state, '{}');
+    assert.equal(p.launch_url, '');
     assert.equal(p.service, 'existing-service');
     assert.equal(p.last_sync, '2026-11-14');
     assert.equal(p.repo, 'git@github.com:owner/repo.git');

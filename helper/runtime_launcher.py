@@ -27,14 +27,14 @@ def launch():
         env=dict(os.environ,**values)
         env.pop('CREDENTIALS_DIRECTORY',None)
         if os.environ.get('STATE_DIRECTORY'):env['HOME']=os.environ['STATE_DIRECTORY'].split(':')[0]
-        env.update(HOST='127.0.0.1',PORT=str(runtime.get('port') or 3000),WWEBJS_DATA_PATH=str(root/'shared/whatsapp'),NODE_ENV=values.get('NODE_ENV','production'))
+        env.update(HOST=runtime.get('listenAddress','127.0.0.1'),PORT=str(runtime.get('port') or 3000),WWEBJS_DATA_PATH=str(root/'shared/whatsapp'),NODE_ENV=values.get('NODE_ENV','production'))
         stdin=None
     else:
         uid=os.getuid();env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':os.environ['HOME'],'DOCKER_HOST':f'unix:///run/user/{uid}/docker.sock','XDG_RUNTIME_DIR':f'/run/user/{uid}'}
         image=config['image']
         if not re.fullmatch(r'uc-project-[a-f0-9]{16}:[0-9]+-[a-f0-9]{10}',image):raise ValueError('Invalid release image')
         argv=['/usr/bin/docker','run','--rm','--name',config['container'],'--label','ubuntu-control.project='+config['id'],'--cap-drop=ALL','--security-opt=no-new-privileges','--env-file=/dev/stdin','--mount','type=volume,src='+config['volume']+',dst='+runtime['dataPath']]
-        if runtime.get('port'):argv+=['--publish',f"127.0.0.1:{runtime['port']}:{runtime['internalPort']}"]
+        if runtime.get('port'):argv+=['--publish',f"{runtime.get('listenAddress','127.0.0.1')}:{runtime['port']}:{runtime['internalPort']}"]
         argv+=[image];stdin=''.join(k+'='+v+'\n' for k,v in values.items()).encode()
     process=subprocess.Popen(argv,cwd=release,env=env,stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     def forward(stream,target):

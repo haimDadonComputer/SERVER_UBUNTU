@@ -42,6 +42,12 @@ def validate_runtime(value,options):
     if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or len(path)>200 or any(ord(c)<33 for c in path):raise ValueError('Invalid local health path')
     if health=='http' and port is None:raise ValueError('HTTP health checks require a port')
     result={'kind':kind,'args':args,'health':health,'port':port,'healthPath':path,'autostart':value.get('autostart') is True,'testScript':value.get('testScript',''),'buildScript':value.get('buildScript','')}
+    install=value.get('dependencyInstall','locked')
+    if install not in ('locked','allow-install'):raise ValueError('Invalid dependency install policy')
+    result['dependencyInstall']=install
+    listen=value.get('listenAddress','127.0.0.1')
+    if listen not in ('127.0.0.1','0.0.0.0'):raise ValueError('Invalid listen address')
+    result['listenAddress']=listen
     for field in ('testScript','buildScript'):
         if result[field] and result[field] not in options.get('scripts',[]):raise ValueError('Select an existing package.json script')
     if kind=='node':
@@ -257,10 +263,12 @@ class Lifecycle:
         if p['runtime']['kind']=='docker':
             value=self.docker(['inspect','--format','{{json .State.Running}}|{{.Config.Image}}|{{index .Config.Labels "ubuntu-control.project"}}',self.names(identifier)['container']]).strip()
             return value=='true|'+p.get('image','')+'|'+identifier
-        output=self.h['run'](['/usr/bin/ss','-H','-lntp','sport = :'+str(p['runtime']['port'])])
+        # Keep Netid in ss output, as required by the shared TCP/UDP parser.
+        output=self.h['run'](['/usr/bin/ss','-H','-lntup','sport = :'+str(p['runtime']['port'])])
         unit=self.names(identifier)['unit']
         for row in self.h['parse_ss'](output):
-            if row.get('pid'):
+            if row.get('pid') and row.get('protocol')=='tcp':
+                if p['runtime'].get('listenAddress')=='0.0.0.0' and row.get('address') not in ('0.0.0.0','::','*'):continue
                 try:
                     if any(unit in line.split('/') for line in pathlib.Path('/proc/'+str(row['pid'])+'/cgroup').read_text().splitlines()):return True
                 except OSError:pass

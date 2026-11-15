@@ -1,5 +1,11 @@
 # Verification record — 2026-11-14
 
+## Content organization and responsive styling — 2026-11-15
+
+Preserved the application header/sidebar and reorganized content: project summaries and status filters, primary actions versus native expandable management/Git/release sections, topic-based settings, filtered jobs and readable event timelines. Network forms, cards and tables share content-only spacing and responsive rules. Existing pending DNS diagnostic changes were preserved.
+
+`npm run build` passed. Both existing Playwright flows passed after adapting navigation assertions: desktop/session/settings/GitHub/jobs and project runtime/private ENV file import/console/archive/restore. Assertions cover hidden advanced controls, persistent task drawer, default settings category, category switching, job filtering, light theme and mobile overflow. No screenshots were captured. Backend behavior was not changed for this redesign; no server deployment or Ubuntu integration was performed.
+
 ## Task panel, ENV import and public publication — 2026-11-15
 
 Local Windows verification: `npm test` passed 24 tests; `npm run check:helper` ran 98 tests, 92 passed and 6 Linux-only tests skipped. `npm run build` passed. The focused Playwright `project runtime` case passed, including the persistent task drawer, no navigation to Jobs, npm-install default, private ENV file preview/merge and console/archive behavior. Screenshot calls were removed; validation used DOM assertions. Bash syntax checks for setup-publication.sh, reload-publication.sh and upgrade.sh passed using Git Bash; `git diff --check` passed.

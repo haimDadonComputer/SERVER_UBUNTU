@@ -42,6 +42,7 @@ import { ErrorDetails } from './diagnostics';
 import { ProjectActions, ProjectEnvironment, ProjectConsole } from './projects';
 import { JobCard, stageLabel } from './jobs';
 import { NetworkSettings } from './network';
+import { ContentTabs, SummaryStrip } from './content';
 type Any = Record<string, any>;
 let csrf = '';
 async function api(url: string, method = 'GET', body?: unknown) {
@@ -118,6 +119,9 @@ function App() {
         [modal, setModal] = useState<React.ReactNode>(null),
         [query, setQuery] = useState(''),
         [filter, setFilter] = useState('all'),
+        [projectFilter, setProjectFilter] = useState('all'),
+        [jobFilter, setJobFilter] = useState('all'),
+        [settingsCategory, setSettingsCategory] = useState('security'),
         [sort, setSort] = useState('port'),
         [consoleService, setConsoleService] = useState(''),
         [logs, setLogs] = useState(''),
@@ -581,6 +585,36 @@ function App() {
         );
     const failed = inv.failed || [],
         activeJobs = jobs.filter((j) => ['queued', 'running'].includes(j.status));
+    const projectStatus = (p: Any) =>
+        p.lifecycle === 'archived'
+            ? 'archived'
+            : inv.services?.find((s: Any) => s.id === p.service)?.status || 'unknown';
+    const visibleProjects = (showArchived ? archivedProjects : projects).filter((p) => {
+        const match = [p.name, p.id, p.repo].some((value) =>
+            String(value || '')
+                .toLowerCase()
+                .includes(query.toLowerCase())
+        );
+        const state = projectStatus(p);
+        return (
+            match &&
+            (showArchived ||
+                projectFilter === 'all' ||
+                (projectFilter === 'running' && state === 'active') ||
+                (projectFilter === 'stopped' && ['inactive', 'stopped'].includes(state)) ||
+                (projectFilter === 'attention' &&
+                    (state === 'failed' ||
+                        p.recoveryPending ||
+                        String(p.deployment || '').startsWith('failed'))))
+        );
+    });
+    const visibleJobs = jobs.filter(
+        (j) =>
+            jobFilter === 'all' ||
+            (jobFilter === 'active' && ['queued', 'running'].includes(j.status)) ||
+            (jobFilter === 'failed' && ['failed', 'interrupted'].includes(j.status)) ||
+            (jobFilter === 'done' && j.status === 'done')
+    );
     const btnService = (id: string) => (
         <div className="actions">
             <button
@@ -1223,6 +1257,30 @@ function App() {
                     )}
                     {page === 'projects' && (
                         <>
+                            <SummaryStrip
+                                items={[
+                                    {
+                                        label: 'פרויקטים פעילים',
+                                        value: projects.length,
+                                        icon: <FolderGit2 size={20} />,
+                                    },
+                                    {
+                                        label: 'שירותים פועלים',
+                                        value: inv.error
+                                            ? '—'
+                                            : projects.filter((p) => projectStatus(p) === 'active')
+                                                  .length,
+                                        icon: <Play size={20} />,
+                                    },
+                                    {
+                                        label: 'פעולות בתהליך',
+                                        value: activeJobs.filter((j) =>
+                                            j.resource.startsWith('project:')
+                                        ).length,
+                                        icon: <Activity size={20} />,
+                                    },
+                                ]}
+                            />
                             <div className="toolbar">
                                 <label className="search">
                                     <Search size={17} />
@@ -1264,108 +1322,145 @@ function App() {
                                     ייבוא מ־GitHub
                                 </button>
                             </div>
-                            <button
-                                className="secondary"
-                                onClick={() => setShowArchived(!showArchived)}
-                            >
-                                {showArchived
-                                    ? 'פרויקטים פעילים'
-                                    : 'ארכיון (' + archivedProjects.length + ')'}
-                            </button>
+                            <div className="collection-heading">
+                                <ContentTabs
+                                    label="תצוגת פרויקטים"
+                                    value={showArchived ? 'archived' : 'active'}
+                                    onChange={(value) => setShowArchived(value === 'archived')}
+                                    items={[
+                                        {
+                                            id: 'active',
+                                            label: 'פרויקטים פעילים',
+                                            count: projects.length,
+                                        },
+                                        {
+                                            id: 'archived',
+                                            label: 'ארכיון',
+                                            count: archivedProjects.length,
+                                        },
+                                    ]}
+                                />
+                                {!showArchived && (
+                                    <label className="inline-filter">
+                                        מצב פרויקט
+                                        <select
+                                            aria-label="סינון פרויקטים"
+                                            value={projectFilter}
+                                            onChange={(e) => setProjectFilter(e.target.value)}
+                                        >
+                                            <option value="all">כל המצבים</option>
+                                            <option value="running">פועלים</option>
+                                            <option value="stopped">כבויים</option>
+                                            <option value="attention">דורשים טיפול</option>
+                                        </select>
+                                    </label>
+                                )}
+                            </div>
                             <div className="project-grid">
-                                {(showArchived ? archivedProjects : projects)
-                                    .filter((p) => p.name.includes(query))
-                                    .map((p) => (
-                                        <section className="panel project-card" key={p.id}>
-                                            <div className="project-top">
+                                {visibleProjects.map((p) => (
+                                    <section className="panel project-card" key={p.id}>
+                                        <div className="project-top">
+                                            <div className="project-identity">
                                                 <div className="project-icon">
-                                                    <FolderGit2 size={25} />
+                                                    <FolderGit2 size={23} />
                                                 </div>
-                                                <Badge
-                                                    value={
-                                                        inv.services?.find(
-                                                            (s: Any) => s.id === p.service
-                                                        )?.status || 'unknown'
-                                                    }
-                                                />
+                                                <div>
+                                                    <h2>{p.name}</h2>
+                                                    <small>
+                                                        {p.runtime
+                                                            ? 'סביבת הפעלה מנוהלת'
+                                                            : 'מוכן להגדרת הפעלה'}
+                                                    </small>
+                                                </div>
                                             </div>
-                                            <h2>{p.name}</h2>
-                                            <p>
-                                                מצב שירות:{' '}
-                                                {p.lifecycle === 'archived'
-                                                    ? 'בארכיון'
-                                                    : inv.services?.find(
-                                                          (s: Any) => s.id === p.service
-                                                      )?.status || 'טרם התקבל מצב'}
-                                            </p>
-                                            {jobs
-                                                .filter((j) => j.resource === 'project:' + p.id)
-                                                .slice(0, 1)
-                                                .map((j) => (
+                                            <Badge
+                                                value={projectStatus(p)}
+                                                label={
+                                                    p.lifecycle === 'archived'
+                                                        ? 'בארכיון'
+                                                        : undefined
+                                                }
+                                            />
+                                        </div>
+                                        {jobs
+                                            .filter((j) => j.resource === 'project:' + p.id)
+                                            .slice(0, 1)
+                                            .map((j) => (
+                                                <button
+                                                    className="project-job-status"
+                                                    data-state={j.status}
+                                                    key={j.id}
+                                                    onClick={() => {
+                                                        setSelectedJob(j.id);
+                                                        setJobPanel(true);
+                                                    }}
+                                                >
+                                                    פעולה: {stageLabel(j.status)} ·{' '}
+                                                    {stageLabel(j.stage)}
+                                                </button>
+                                            ))}
+                                        <p className="mono muted project-path" title={p.root}>
+                                            {p.root}
+                                        </p>
+                                        <div className="project-meta">
+                                            <span>
+                                                <GitBranch size={14} />
+                                                {p.branch}
+                                            </span>
+                                            <span>{p.kind.toUpperCase()}</span>
+                                            <span>פורט {p.health_port || '—'}</span>
+                                        </div>
+                                        {p.repo && (
+                                            <a
+                                                href={githubUrl(p.repo)}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="repo-link mono"
+                                            >
+                                                {p.repo} ↗
+                                            </a>
+                                        )}
+                                        <ProjectActions
+                                            project={p}
+                                            api={api}
+                                            refresh={refresh}
+                                            onQueued={() =>
+                                                setNotice(
+                                                    'הפעולה נוספה לתור ותתבצע ברקע. אפשר להמשיך לעבוד כאן.'
+                                                )
+                                            }
+                                            serverAddresses={serverAddresses}
+                                            publication={publications[p.id]}
+                                            console={openProjectConsole}
+                                            totpEnabled={!!user.totpEnabled}
+                                        />
+                                        {p.lifecycle !== 'archived' && (
+                                            <>
+                                                <div className="project-controls">
+                                                    {p.service &&
+                                                        !p.runtime &&
+                                                        btnService(p.service)}
                                                     <button
                                                         className="secondary"
-                                                        key={j.id}
                                                         onClick={() => {
-                                                            setSelectedJob(j.id);
-                                                            setJobPanel(true);
+                                                            setFileProject(p);
+                                                            setFilePath('');
+                                                            setEditing('');
+                                                            setPage('files');
                                                         }}
                                                     >
-                                                        פעולה: {stageLabel(j.status)} ·{' '}
-                                                        {stageLabel(j.stage)}
+                                                        <Folder size={14} />
+                                                        קבצים
                                                     </button>
-                                                ))}
-                                            <p className="mono muted">{p.root}</p>
-                                            <div className="project-meta">
-                                                <span>
-                                                    <GitBranch size={14} />
-                                                    {p.branch}
-                                                </span>
-                                                <span>{p.kind.toUpperCase()}</span>
-                                                <span>פורט {p.health_port || '—'}</span>
-                                            </div>
-                                            {p.repo && (
-                                                <a
-                                                    href={githubUrl(p.repo)}
-                                                    target="_blank"
-                                                    rel="noreferrer"
-                                                    className="repo-link mono"
-                                                >
-                                                    {p.repo} ↗
-                                                </a>
-                                            )}
-                                            <ProjectActions
-                                                project={p}
-                                                api={api}
-                                                refresh={refresh}
-                                                onQueued={() =>
-                                                    setNotice(
-                                                        'הפעולה נוספה לתור ותתבצע ברקע. אפשר להמשיך לעבוד כאן.'
-                                                    )
-                                                }
-                                                serverAddresses={serverAddresses}
-                                                publication={publications[p.id]}
-                                                console={openProjectConsole}
-                                                totpEnabled={!!user.totpEnabled}
-                                            />
-                                            {p.lifecycle !== 'archived' && (
-                                                <>
-                                                    <div className="project-controls">
-                                                        {p.service &&
-                                                            !p.runtime &&
-                                                            btnService(p.service)}
-                                                        <button
-                                                            className="secondary"
-                                                            onClick={() => {
-                                                                setFileProject(p);
-                                                                setFilePath('');
-                                                                setEditing('');
-                                                                setPage('files');
-                                                            }}
-                                                        >
-                                                            <Folder size={14} />
-                                                            קבצים
-                                                        </button>
-                                                    </div>
+                                                    <button
+                                                        className="text-btn"
+                                                        onClick={() => envModal(p)}
+                                                    >
+                                                        משתני סביבה
+                                                    </button>
+                                                </div>
+                                                <details className="project-source-details">
+                                                    <summary>מאגר, סנכרון וגרסאות</summary>
                                                     <div className="project-controls">
                                                         {!p.runtime && (
                                                             <button
@@ -1387,12 +1482,7 @@ function App() {
                                                                 סנכרון GitHub
                                                             </button>
                                                         )}
-                                                        <button
-                                                            className="text-btn"
-                                                            onClick={() => envModal(p)}
-                                                        >
-                                                            משתני סביבה
-                                                        </button>
+
                                                         <button
                                                             className="text-btn"
                                                             disabled={!p.repo}
@@ -1615,14 +1705,25 @@ function App() {
                                                             גרסאות ושחזור
                                                         </button>
                                                     </div>
-                                                </>
-                                            )}
-                                            <small className="muted">
-                                                סנכרון אחרון: {p.last_sync || 'טרם בוצע'}
-                                            </small>
-                                        </section>
-                                    ))}
+                                                </details>
+                                            </>
+                                        )}
+                                        <small className="muted">
+                                            סנכרון אחרון: {p.last_sync || 'טרם בוצע'}
+                                        </small>
+                                    </section>
+                                ))}
                             </div>
+                            {visibleProjects.length === 0 &&
+                                (showArchived ? archivedProjects : projects).length > 0 && (
+                                    <section className="panel">
+                                        <Empty
+                                            icon={<Search />}
+                                            text="לא נמצאו פרויקטים מתאימים"
+                                            detail="נסו חיפוש אחר או הציגו את כל המצבים."
+                                        />
+                                    </section>
+                                )}
                             {!(showArchived ? archivedProjects : projects).length && (
                                 <section className="panel">
                                     <Empty
@@ -1989,17 +2090,40 @@ function App() {
                         </section>
                     )}
                     {page === 'jobs' && (
-                        <section className="panel">
+                        <section className="panel jobs-page">
                             <div className="panel-heading">
                                 <h2>תור משימות</h2>
                                 <span className="muted">שלבים ופלט מתעדכנים במהלך הפעולה</span>
                             </div>
-                            {jobs.length ? (
-                                jobs.map((j) => <JobCard key={j.id} job={j} />)
+                            <ContentTabs
+                                label="סינון משימות"
+                                value={jobFilter}
+                                onChange={setJobFilter}
+                                items={[
+                                    { id: 'all', label: 'כל המשימות', count: jobs.length },
+                                    { id: 'active', label: 'בתהליך', count: activeJobs.length },
+                                    {
+                                        id: 'failed',
+                                        label: 'דורשות טיפול',
+                                        count: jobs.filter((j) =>
+                                            ['failed', 'interrupted'].includes(j.status)
+                                        ).length,
+                                    },
+                                    {
+                                        id: 'done',
+                                        label: 'הושלמו',
+                                        count: jobs.filter((j) => j.status === 'done').length,
+                                    },
+                                ]}
+                            />
+                            {visibleJobs.length ? (
+                                visibleJobs.map((j) => <JobCard key={j.id} job={j} />)
                             ) : (
                                 <Empty
                                     icon={<Activity />}
-                                    text="אין משימות בתור"
+                                    text={
+                                        jobs.length ? 'אין משימות בסינון שנבחר' : 'אין משימות בתור'
+                                    }
                                     detail="פעולות שירותים ופריסות יופיעו כאן עם התוצאה שלהן."
                                 />
                             )}
@@ -2007,10 +2131,48 @@ function App() {
                     )}
                     {page === 'settings' && (
                         <>
-                            <div className="settings-grid">
-                                <GitHubSettings api={api} totpEnabled={!!user.totpEnabled} />
-                                <NetworkSettings api={api} totpEnabled={!!user.totpEnabled} />
-                                <section className="panel">
+                            <ContentTabs
+                                label="נושאי הגדרות"
+                                value={settingsCategory}
+                                onChange={setSettingsCategory}
+                                items={[
+                                    { id: 'security', label: 'חשבון ואבטחה' },
+                                    { id: 'network', label: 'גישה ופרסום' },
+                                    { id: 'github', label: 'GitHub' },
+                                    { id: 'preferences', label: 'תצוגה והתראות' },
+                                    { id: 'maintenance', label: 'גיבויים ויומן' },
+                                ]}
+                            />
+                            <p className="section-description">
+                                {
+                                    (
+                                        {
+                                            security: 'פרטי החשבון, סיסמה ואימות דו־שלבי.',
+                                            network: 'כתובת השרת, HTTPS ופרסום ממשק הניהול.',
+                                            github: 'החיבור ל־GitHub והמאגרים הזמינים להתקנה.',
+                                            preferences: 'ספי התראה ותדירות רענון.',
+                                            maintenance: 'גיבויים מוצפנים והיסטוריית פעולות.',
+                                        } as Any
+                                    )[settingsCategory]
+                                }
+                            </p>
+                            <div
+                                className="settings-grid organized-settings"
+                                data-category={settingsCategory}
+                            >
+                                <div
+                                    className="settings-module"
+                                    hidden={settingsCategory !== 'github'}
+                                >
+                                    <GitHubSettings api={api} totpEnabled={!!user.totpEnabled} />
+                                </div>
+                                <div
+                                    className="settings-module"
+                                    hidden={settingsCategory !== 'network'}
+                                >
+                                    <NetworkSettings api={api} totpEnabled={!!user.totpEnabled} />
+                                </div>
+                                <section className="panel" hidden={settingsCategory !== 'security'}>
                                     <div className="panel-heading">
                                         <h2>
                                             <ShieldCheck size={19} />
@@ -2056,7 +2218,7 @@ function App() {
                                         מרבי: 8 שעות.
                                     </p>
                                 </section>
-                                <section className="panel">
+                                <section className="panel" hidden={settingsCategory !== 'network'}>
                                     <div className="panel-heading">
                                         <h2>
                                             <Network size={19} />
@@ -2100,7 +2262,10 @@ function App() {
                                         בדיקת חיבור חומת אש
                                     </button>
                                 </section>
-                                <section className="panel">
+                                <section
+                                    className="panel"
+                                    hidden={settingsCategory !== 'preferences'}
+                                >
                                     <div className="panel-heading">
                                         <h2>
                                             <Settings size={19} />
@@ -2177,7 +2342,10 @@ function App() {
                                         </form>
                                     )}
                                 </section>
-                                <section className="panel">
+                                <section
+                                    className="panel"
+                                    hidden={settingsCategory !== 'maintenance'}
+                                >
                                     <div className="panel-heading">
                                         <h2>
                                             <Folder size={19} />
@@ -2209,7 +2377,7 @@ function App() {
                                     ))}
                                 </section>
                             </div>
-                            <section className="panel">
+                            <section className="panel" hidden={settingsCategory !== 'maintenance'}>
                                 <div className="panel-heading">
                                     <h2>יומן פעולות מנהל</h2>
                                     <button

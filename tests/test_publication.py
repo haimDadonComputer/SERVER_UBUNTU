@@ -5,6 +5,18 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_management_dns_failures_are_actionable_and_do_not_modify_publication(self):
+        import socket
+        from diagnostics import OperationError
+        before=self.pub.read()
+        cases=[(socket.gaierror(socket.EAI_NONAME,'Name or service not known'),'MANAGEMENT_DNS_UNRESOLVED'),([(socket.AF_INET,socket.SOCK_STREAM,6,'',('1.1.1.1',443))],'MANAGEMENT_DNS_IP_MISMATCH')]
+        for response,code in cases:
+            with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',side_effect=response if isinstance(response,Exception) else None,return_value=response):
+                with self.assertRaises(OperationError) as caught:self.pub.publish(None,{'enabled':True,'confirmed':True})
+            self.assertEqual(caught.exception.details['code'],code)
+            self.assertEqual(caught.exception.details['stage'],'dns-resolution')
+            self.assertIn('control.example.com',caught.exception.details['stderr']);self.assertIn('8.8.8.8',caught.exception.details['stderr'])
+            self.assertEqual(self.pub.read(),before);self.assertFalse(self.pub.path('challenge.conf').exists())
     def test_tailscale_https_does_not_conflict_with_public_ip_but_wildcards_do(self):
         from helper import parse_ss
         self.backend['parse_ss']=parse_ss

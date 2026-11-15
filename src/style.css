@@ -1591,3 +1591,516 @@ footer span:first-child {
     overflow: auto;
     white-space: pre-wrap;
 }
+
+/* Content layout: the existing application header and sidebar stay unchanged. */
+.workspace {
+    padding-bottom: 24px;
+}
+.workspace [hidden] {
+    display: none !important;
+}
+.workspace .panel {
+    border-radius: 14px;
+    box-shadow: 0 4px 20px #00000008;
+}
+.workspace .panel-heading {
+    padding: 21px 24px;
+    background: color-mix(in srgb, var(--surface2) 32%, var(--surface));
+}
+.workspace .panel-heading h2 {
+    font-size: 15px;
+}
+.workspace .toolbar {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+    gap: 12px;
+    align-items: center;
+}
+.workspace .toolbar label {
+    margin-bottom: 0;
+}
+.workspace .toolbar .search {
+    flex: 1;
+    min-width: 180px;
+}
+.workspace .primary,
+.workspace .secondary {
+    min-height: 38px;
+    border-radius: 8px;
+}
+.workspace .server-strip {
+    border-radius: 14px;
+    padding: 24px;
+    background: linear-gradient(
+        110deg,
+        var(--surface),
+        color-mix(in srgb, var(--accent) 7%, var(--surface))
+    );
+}
+.workspace .metric {
+    min-height: 156px;
+    padding: 21px;
+    border-radius: 12px;
+    box-shadow: none;
+}
+.workspace .metric-value {
+    margin-block: 12px 9px;
+}
+.workspace table th {
+    font-weight: 500;
+    font-size: 11px;
+    padding-block: 15px;
+}
+.workspace table td {
+    padding-block: 16px;
+}
+.workspace tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--surface2) 24%, transparent);
+}
+.workspace table .actions {
+    flex-wrap: nowrap;
+}
+.summary-strip {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 14px;
+    margin-bottom: 24px;
+    overflow: hidden;
+}
+.summary-strip > div {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 20px 24px;
+}
+.summary-strip > div + div {
+    border-inline-start: 1px solid var(--border);
+}
+.summary-strip small {
+    display: block;
+    font-size: 12px;
+    margin-bottom: 3px;
+}
+.summary-strip strong {
+    display: block;
+    font-size: 26px;
+    line-height: 1.3;
+    font-weight: 600;
+}
+.summary-icon {
+    color: var(--accent);
+    display: flex;
+    padding: 10px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.content-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 5px;
+    border-radius: 10px;
+    background: var(--surface2);
+    width: fit-content;
+    max-width: 100%;
+}
+.content-tabs button {
+    padding: 9px 15px;
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 12px;
+    min-height: 38px;
+}
+.content-tabs button[aria-pressed='true'] {
+    color: var(--text);
+    background: var(--surface);
+    box-shadow: 0 1px 5px #0002;
+}
+.content-tabs button span {
+    font-size: 11px;
+    background: var(--bg);
+    border-radius: 5px;
+    padding: 1px 6px;
+}
+.collection-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 15px;
+    margin-bottom: 22px;
+}
+.inline-filter {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+}
+.inline-filter select {
+    min-width: 150px;
+    background: var(--surface);
+}
+.workspace .project-grid {
+    gap: 24px;
+    align-items: start;
+}
+.workspace .project-card {
+    padding: 24px;
+    margin: 0;
+}
+.project-top {
+    gap: 12px;
+}
+.project-identity {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+}
+.project-identity > div:last-child {
+    min-width: 0;
+}
+.project-identity h2 {
+    overflow-wrap: anywhere;
+    font-size: 18px;
+}
+.project-identity small {
+    display: block;
+    margin-top: 4px;
+}
+.project-card .project-icon {
+    padding: 11px;
+    flex-shrink: 0;
+}
+.project-card .project-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin: 12px 0;
+    font-size: 11px;
+}
+.project-card .project-meta {
+    margin: 0 0 16px;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 11px;
+}
+.project-card .project-meta span {
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+.project-card .repo-link {
+    font-size: 11px;
+    margin-bottom: 16px;
+}
+.project-job-status {
+    display: flex;
+    justify-content: flex-start;
+    text-align: start;
+    width: 100%;
+    border-radius: 7px;
+    padding: 9px 12px;
+    margin: 12px 0;
+    font-size: 11px;
+    color: var(--muted);
+    background: var(--surface2);
+    border-inline-start: 3px solid var(--border);
+}
+.project-job-status[data-state='running'],
+.project-job-status[data-state='queued'] {
+    border-inline-start-color: var(--accent);
+    color: var(--accent);
+}
+.project-job-status[data-state='failed'],
+.project-job-status[data-state='interrupted'] {
+    border-inline-start-color: var(--red);
+    color: var(--red);
+}
+.project-actions > .lifecycle-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    border: 0;
+    padding: 0;
+    margin: 18px 0 12px;
+}
+.project-actions > .lifecycle-actions > * {
+    padding-inline: 8px;
+    font-size: 11px;
+}
+.project-manage,
+.project-source-details,
+.release-details {
+    border-top: 1px solid var(--border);
+    margin-top: 12px;
+}
+.project-manage > summary,
+.project-source-details > summary,
+.release-details > summary {
+    cursor: pointer;
+    padding-block: 12px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.project-manage > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.project-manage > summary:after {
+    content: '⌄';
+    margin-inline-start: auto;
+}
+.project-manage[open] > summary {
+    color: var(--text);
+}
+.project-manage[open] > summary:after {
+    transform: rotate(180deg);
+}
+.project-action-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: var(--surface2);
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+.project-action-group > span {
+    width: 100%;
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 3px;
+}
+.project-action-group.danger-zone {
+    background: color-mix(in srgb, var(--red) 4%, var(--surface));
+}
+.project-card .project-update-status {
+    border: 0;
+    background: none;
+    padding: 0;
+    margin-top: 16px;
+}
+.project-update-status label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+}
+.project-update-status select {
+    max-width: 67%;
+    padding: 7px 9px;
+    font-size: 11px;
+}
+.release-details .commit-grid {
+    padding: 10px 0;
+    gap: 14px;
+}
+.project-source-details > .project-controls {
+    border: 0;
+    margin-top: 0;
+    padding-top: 5px;
+}
+.section-description {
+    color: var(--muted);
+    font-size: 13px;
+    margin: 15px 0 24px;
+}
+.settings-grid.organized-settings {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 1050px;
+    align-items: start;
+}
+.settings-grid.organized-settings[data-category='network'] {
+    max-width: none;
+    grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
+}
+.settings-module {
+    min-width: 0;
+}
+.organized-settings form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 24px;
+    margin: 24px;
+}
+.organized-settings form label {
+    flex-direction: column;
+    align-items: stretch;
+    margin: 0;
+    gap: 8px;
+}
+.organized-settings form input {
+    width: 100%;
+    min-height: 40px;
+}
+.organized-settings form > p,
+.organized-settings form > .project-controls,
+.organized-settings form > .alert {
+    grid-column: 1/-1;
+}
+.organized-settings form > button {
+    justify-self: start;
+}
+.network-settings > label,
+.network-settings > .project-controls {
+    margin: 18px 24px;
+}
+.network-settings > .checkbox-label {
+    flex-direction: row;
+    align-items: flex-start;
+}
+.network-settings .checkbox-label input {
+    flex-shrink: 0;
+    margin-top: 4px;
+}
+.network-settings .project-controls {
+    padding-block: 16px 4px;
+    gap: 10px;
+}
+.jobs-page > .content-tabs {
+    margin: 20px 24px;
+}
+.job-detail {
+    margin: 0 0 14px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+}
+.jobs-page > .job-detail {
+    margin: 16px 24px;
+}
+.job-detail .panel-heading {
+    padding: 0 0 12px;
+    background: none;
+    border: 0;
+}
+.job-detail > p {
+    font-size: 12px;
+    margin-bottom: 6px;
+}
+.job-detail > .mono {
+    color: var(--muted);
+}
+.job-facts {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+    padding: 14px;
+    background: var(--surface2);
+    border-radius: 8px;
+}
+.job-facts dt {
+    color: var(--muted);
+    font-size: 10px;
+    margin-bottom: 4px;
+}
+.job-facts dd {
+    margin: 0;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+.job-detail details > summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 12px;
+    padding-block: 8px;
+}
+.job-events {
+    border-inline-start: 2px solid var(--border);
+    margin: 12px 4px 0 0;
+    padding-inline-start: 16px;
+}
+.job-events > div {
+    margin-bottom: 12px;
+}
+.job-events small {
+    display: block;
+    margin-bottom: 6px;
+}
+.job-events .code {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--bg);
+}
+.jobs-drawer .job-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 1200px) {
+    .workspace .project-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .settings-grid.organized-settings[data-category='network'] {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+@media (max-width: 600px) {
+    .summary-strip > div {
+        padding: 14px 9px;
+        gap: 8px;
+    }
+    .summary-strip strong {
+        font-size: 21px;
+    }
+    .summary-strip small {
+        font-size: 10px;
+    }
+    .summary-icon {
+        display: none;
+    }
+    .workspace .project-card {
+        padding: 18px;
+    }
+    .project-top {
+        align-items: flex-start;
+    }
+    .project-actions > .lifecycle-actions {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .project-actions > .lifecycle-actions > * {
+        min-height: 40px;
+        font-size: 12px;
+    }
+    .organized-settings form {
+        grid-template-columns: minmax(0, 1fr);
+        margin: 18px;
+    }
+    .content-tabs {
+        width: 100%;
+        gap: 3px;
+    }
+    .content-tabs button {
+        flex: 1 0 auto;
+        padding-inline: 10px;
+    }
+    .collection-heading {
+        align-items: stretch;
+    }
+    .inline-filter {
+        width: 100%;
+        justify-content: space-between;
+    }
+    .job-facts {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .jobs-page > .content-tabs {
+        margin: 16px;
+        width: auto;
+    }
+    .jobs-page > .job-detail {
+        margin: 12px;
+        padding: 16px;
+    }
+}

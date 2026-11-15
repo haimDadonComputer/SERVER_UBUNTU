@@ -10,6 +10,7 @@ import threading
 from project_secrets import atomic_private
 from project_lifecycle import Lifecycle, project_lock, BUILD_LOCK, REGISTRY_LOCK, PROJECT_LOCKS
 from job_progress import emit
+from diagnostics import OperationError
 
 NETWORK_LOCK=threading.RLock()
 DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[]}
@@ -175,8 +176,18 @@ class Publication:
         self.fw_status()
         if management:
             if not data['domain']:raise ValueError('Configure a management domain first')
-            resolved={row[4][0] for row in socket.getaddrinfo(data['domain'],443,family=socket.AF_INET)}
-            if data['ip'] not in resolved:raise ValueError('Management DNS does not resolve to configured server IP')
+            emit('dns-resolution','Checking '+data['domain'])
+            try:resolved={row[4][0] for row in socket.getaddrinfo(data['domain'],443,family=socket.AF_INET)}
+            except socket.gaierror as error:
+                raise OperationError('לא ניתן לפתור את דומיין הניהול: '+data['domain'],{
+                    'code':'MANAGEMENT_DNS_UNRESOLVED','stage':'dns-resolution',
+                    'stderr':'Domain: '+data['domain']+'; expected IPv4: '+data['ip']+'; resolver: '+str(error),
+                    'hint':'ודאו שהוגדר הדומיין המלא ללא https:// או פורט, שקיימת עבורו רשומת A אל '+data['ip']+', ושהשרת מצליח לפתור אותה. בדקו שמספק ה־DNS לא הוסיף את סיומת הדומיין פעמיים. אם הרשומה חדשה, המתינו לעדכון מטמון ה־DNS ונסו שוב.'}) from None
+            if data['ip'] not in resolved:
+                raise OperationError('דומיין הניהול אינו מצביע ל־IP שהוגדר',{
+                    'code':'MANAGEMENT_DNS_IP_MISMATCH','stage':'dns-resolution',
+                    'stderr':'Domain: '+data['domain']+'; expected IPv4: '+data['ip']+'; resolved IPv4: '+', '.join(sorted(resolved)),
+                    'hint':'תקנו את רשומת A של '+data['domain']+' כך שתצביע ל־'+data['ip']+', או תקנו את כתובת השרת בהגדרות. הפרסום לא הופעל.'})
             port=443;upstream=3080;tls=True;previous=data['management']
         else:
             if p.get('lifecycle','active')!='active' or p.get('ownership')!='managed':raise ValueError('An active managed project is required')

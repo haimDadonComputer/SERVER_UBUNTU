@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,10 @@ import argon2 from 'argon2';
 let server: http.Server, dir: string, db: any, base: string;
 const rootRecords = new Map<string, any>(),
     environments = new Map<string, Record<string, string>>();
+async function expandDetails(details: Locator) {
+    if ((await details.getAttribute('open')) === null)
+        await details.locator(':scope > summary').click();
+}
 test.beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-ui-'));
     db = openDatabase(dir);
@@ -33,6 +37,16 @@ test.beforeAll(async () => {
             port: 3080,
         },
         helper: async (action: string, args: any) => {
+            if (action === 'network-status')
+                return {
+                    ip: '192.0.2.20',
+                    domain: 'control.example.test',
+                    email: 'test@example.test',
+                    management: false,
+                    projects: {},
+                    certificates: {},
+                    prepared: false,
+                };
             if (action === 'project-env-preview' || action === 'project-env-import') {
                 const imported = Object.fromEntries(
                     args.text
@@ -289,6 +303,11 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
         .toBe('hello from the browser');
     await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'התחברות ואבטחה' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'GitHub App', exact: true })).not.toBeVisible();
+    await page.getByRole('button', { name: 'גישה ופרסום', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'כתובות שרת ופרסום ציבורי' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'התחברות ואבטחה' })).not.toBeVisible();
+    await page.getByRole('button', { name: 'GitHub', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'GitHub App', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'בדיקת חיבור', exact: true }).click();
     await expect(page.getByLabel('GitHub App ID')).toHaveValue('123');
@@ -313,9 +332,11 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
         .locator('.project-card')
         .filter({ has: page.getByRole('heading', { name: 'private-app', exact: true }) });
     await expect(imported).toBeVisible();
+    await expandDetails(imported.locator('.project-source-details'));
     await imported.getByRole('button', { name: 'משיכת קוד בלבד', exact: true }).click();
     await page.getByRole('button', { name: 'אישור מפורש', exact: true }).click();
     await page.getByRole('button', { name: 'משימות רקע', exact: true }).click();
+    await page.getByRole('button', { name: /^דורשות טיפול/ }).click();
     await expect(page.getByText('אימות Git מול המאגר נכשל.', { exact: true })).toBeVisible();
     await page.getByText('פרטי השגיאה והמלצה לטיפול', { exact: true }).click();
     await expect(page.getByText('GIT_AUTH_FAILED', { exact: true })).toBeVisible();
@@ -339,6 +360,9 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole('button', { name: 'לוח בקרה', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'סקירת השרת' })).toBeVisible();
+    await page.getByRole('button', { name: 'הגדרות ואבטחה', exact: true }).click();
+    await page.getByRole('button', { name: 'גישה ופרסום', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'כתובות שרת ופרסום ציבורי' })).toBeVisible();
     expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
     ).toBeTruthy();
@@ -366,6 +390,9 @@ test('project runtime, private environment metadata, console and archive restora
     const card = page
         .locator('.project-card')
         .filter({ has: page.getByRole('heading', { name: 'מחזור חיים', exact: true }) });
+    await expect(card.getByRole('button', { name: 'הגדרות הפעלה', exact: true })).not.toBeVisible();
+    await expect(card.getByRole('button', { name: 'קונסול הפרויקט', exact: true })).toBeVisible();
+    await expandDetails(card.locator('.project-manage'));
     await card.getByRole('button', { name: 'הגדרות הפעלה', exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByLabel('script להפעלה')).toHaveValue('start');
@@ -385,6 +412,7 @@ test('project runtime, private environment metadata, console and archive restora
         'href',
         'http://192.0.2.20:3000/'
     );
+    await expandDetails(card.locator('.project-manage'));
     await card.getByRole('button', { name: 'כתובת פתיחה', exact: true }).click();
     await dialog.getByLabel('כתובת האפליקציה').fill('http://192.0.2.10:3000/');
     await dialog.getByRole('button', { name: 'שמירת כתובת' }).click();
@@ -400,13 +428,11 @@ test('project runtime, private environment metadata, console and archive restora
     await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
     await expect(dialog.getByLabel('ערך חדש API_KEY')).toHaveValue('');
     await expect(dialog.getByText('browser-test-private-value')).toHaveCount(0);
-    await dialog
-        .getByLabel('העלאת קובץ ENV (מיזוג)')
-        .setInputFiles({
-            name: '.env',
-            mimeType: 'text/plain',
-            buffer: Buffer.from('API_KEY=uploaded-private-value\nEMPTY=\n'),
-        });
+    await dialog.getByLabel('העלאת קובץ ENV (מיזוג)').setInputFiles({
+        name: '.env',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('API_KEY=uploaded-private-value\nEMPTY=\n'),
+    });
     await expect(dialog.getByText(/API_KEY \(החלפה\)/)).toBeVisible();
     await expect(dialog.getByText('uploaded-private-value')).toHaveCount(0);
     await dialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
@@ -451,16 +477,17 @@ test('project runtime, private environment metadata, console and archive restora
     await expect(page.getByText('ממתין ללוגים מהפרויקט…', { exact: true })).toHaveCount(0);
     await expect(page.getByText('HTTP fallback log')).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
+    await expandDetails(card.locator('.project-manage'));
     await card.getByRole('button', { name: 'העברה לארכיון', exact: true }).click();
     await dialog.getByLabel('להמשך הקלידו lifecycle-demo').fill('lifecycle-demo');
     await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
-    await page.getByRole('button', { name: /^ארכיון \(/ }).click();
+    await page.getByRole('button', { name: /^ארכיון/ }).click();
     await expect(card.getByRole('button', { name: 'מחיקה לצמיתות', exact: true })).toBeVisible();
     await card.getByRole('button', { name: 'שחזור מהארכיון', exact: true }).click();
     await dialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
     await page.getByRole('button', { name: 'פרויקטים', exact: true }).click();
-    await page.getByRole('button', { name: 'פרויקטים פעילים', exact: true }).click();
+    await page.getByRole('button', { name: /^פרויקטים פעילים/ }).click();
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
     await expect(card.getByText(/שירות: כבוי/)).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });

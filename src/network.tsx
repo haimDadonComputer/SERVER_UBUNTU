@@ -70,7 +70,7 @@ export function NetworkSettings({
     }
     const publication = project && state?.projects?.[project.id];
     return (
-        <section className="panel">
+        <section className="panel network-settings">
             <div className="panel-heading">
                 <h2>{project ? 'פרסום הפרויקט באינטרנט' : 'כתובות שרת ופרסום ציבורי'}</h2>
                 <button

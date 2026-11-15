@@ -81,25 +81,43 @@ export function JobCard({
         <article className={'job-detail ' + (selected ? 'selected' : '')} id={'job-' + j.id}>
             <div className="panel-heading">
                 <strong>{stageLabel(j.stage)}</strong>
-                <span>{stageLabel(j.status)}</span>
+                <span className={'badge ' + j.status}>{stageLabel(j.status)}</span>
             </div>
             <p className="mono">{j.resource}</p>
             <p>פעולה: {stageLabel(j.action || j.stage)}</p>
-            <small>
-                נוצרה: {j.created} · התחילה: {j.started || 'טרם התחילה'} · הסתיימה:{' '}
-                {j.finished || '—'} · משך: {Math.max(0, Math.floor((end - start) / 1000))} שניות
-            </small>
+            <dl className="job-facts">
+                <div>
+                    <dt>נוצרה</dt>
+                    <dd>{j.created}</dd>
+                </div>
+                <div>
+                    <dt>התחילה</dt>
+                    <dd>{j.started || 'טרם התחילה'}</dd>
+                </div>
+                <div>
+                    <dt>הסתיימה</dt>
+                    <dd>{j.finished || '—'}</dd>
+                </div>
+                <div>
+                    <dt>משך</dt>
+                    <dd>{Math.max(0, Math.floor((end - start) / 1000))} שניות</dd>
+                </div>
+            </dl>
             <details open={expanded} onToggle={(e) => setExpanded(e.currentTarget.open)}>
                 <summary>שלבים ופלט מסונן ({events.length})</summary>
                 {(gap || events.length >= 300) && <p>הפלט מוגבל; ייתכן שהודעות קודמות חסרות.</p>}
-                {events.map((event: any) => (
-                    <div key={event.id}>
-                        <small>
-                            {event.time} · {stageLabel(event.stage)}
-                        </small>
-                        {event.text && <pre className="code">{event.text}</pre>}
-                    </div>
-                ))}
+                <div className="job-events">
+                    {events.map((event: any, index: number) => (
+                        <div key={event.id}>
+                            {(index === 0 || event.stage !== events[index - 1].stage) && (
+                                <small>
+                                    {event.time} · {stageLabel(event.stage)}
+                                </small>
+                            )}
+                            {event.text && <pre className="code">{event.text}</pre>}
+                        </div>
+                    ))}
+                </div>
             </details>
             {j.error && <p className="danger-text">{j.error}</p>}
             <ErrorDetails details={j.details} jobId={j.id} />

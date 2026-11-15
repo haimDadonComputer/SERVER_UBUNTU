@@ -262,6 +262,7 @@ class Lifecycle:
         self.h['run'](['/usr/bin/systemctl','enable' if p['runtime']['autostart'] else 'disable','--runtime',n['unit']])
     def health(self,identifier,p):
         initial=self.state(p);r=p['runtime'];deadline=time.monotonic()+(20 if r['health']=='process' else 45)
+        http_status=None;http_error=''
         while True:
             state=self.state(p)
             if state['active']!='active' or state.get('restarts')!=initial.get('restarts'):raise ValueError('Service exited or restarted during health check')
@@ -272,17 +273,45 @@ class Lifecycle:
                     class NoRedirect(urllib.request.HTTPRedirectHandler):
                         def redirect_request(self,*a,**kw):return None
                     with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect).open(request,timeout=2) as response:
+                        http_status=response.status;http_error=''
                         if 200<=response.status<300 and self.http_owned(identifier,p):return
-                except OSError:pass
-                if time.monotonic()>=deadline:raise ValueError('HTTP health check failed or the listener does not belong to this project')
+                except OSError as error:
+                    http_status=getattr(error,'code',None);http_error=type(error).__name__
+                if time.monotonic()>=deadline:raise self.http_health_failure(identifier,p,http_status,http_error)
             elif time.monotonic()>=deadline:return
             time.sleep(1)
+    def http_health_failure(self,identifier,p,status,error):
+        r=p['runtime'];listeners=[];probe_error='';unit=self.names(identifier)['unit']
+        try:
+            output=self.h['run'](['/usr/bin/ss','-H','-lntup'])
+            for row in self.h['parse_ss'](output):
+                if row.get('protocol')!='tcp':continue
+                owned=None
+                if row.get('pid'):
+                    try:owned=any(unit in line.split('/') for line in pathlib.Path('/proc/'+str(row['pid'])+'/cgroup').read_text().splitlines())
+                    except OSError:pass
+                if owned or row.get('port')==r['port']:
+                    listeners.append({key:row.get(key) for key in ('address','port','pid','process')}|{'owned':owned})
+        except (OSError,ValueError,KeyError) as unavailable:probe_error=type(unavailable).__name__
+        own=[row for row in listeners if row['owned']]
+        code='HEALTH_HTTP_UNREACHABLE';reason='לא התקבלה תשובת HTTP תקינה';hint='בדקו בהגדרות ההפעלה שהפורט ונתיב בדיקת התקינות תואמים לאפליקציה.'
+        if own and not any(row['port']==r['port'] for row in own):
+            code='HEALTH_PORT_MISMATCH';reason='האפליקציה מאזינה בפורט שונה מהפורט שהוגדר';hint='הגדירו בפורט בשרת את פורט האפליקציה, או התאימו את האפליקציה לשימוש במשתנה PORT. פורט ה־proxy הציבורי מוגדר בנפרד.'
+        elif r.get('listenAddress')=='0.0.0.0' and any(row['port']==r['port'] for row in own) and not any(row['port']==r['port'] and row['address'] in ('0.0.0.0','::','*') for row in own):
+            code='HEALTH_BIND_MISMATCH';reason='האפליקציה מאזינה מקומית בלבד למרות שנבחרה האזנה מרחוק';hint='לפרסום דרך Nginx בחרו האזנה מקומית בהגדרות ההפעלה ופרסמו דרך פרסום באינטרנט. להאזנה ישירה יש להתאים את האפליקציה לשימוש במשתנה HOST.'
+        elif status is not None and not 200<=status<300:
+            code='HEALTH_HTTP_STATUS';reason='נתיב בדיקת התקינות החזיר HTTP '+str(status);hint='בחרו נתיב מקומי שמחזיר 2xx ללא הזדהות וללא הפניה. בדיקת התקינות אינה עוקבת אחרי הפניות.'
+        elif status is not None and 200<=status<300:
+            code='HEALTH_PROBE_UNAVAILABLE' if probe_error else 'HEALTH_LISTENER_OWNERSHIP';reason='התקבלה תשובת HTTP אך לא אומתה בעלות הפרויקט על המאזין';hint='בדקו את רשימת המאזינים וה־PID בדוח. אין להסתמך על תשובה מתהליך אחר או על בדיקה שלא הצליחה לקרוא בעלות.'
+        observed={'url':'http://127.0.0.1:'+str(r['port'])+r['healthPath'],'listenAddress':r.get('listenAddress','127.0.0.1'),'httpStatus':status,'requestError':error,'listenerProbeError':probe_error,'listeners':listeners[:30]}
+        return OperationError(reason,{'code':code,'stage':'health','httpStatus':status,'stderr':reason,'stdout':json.dumps(observed,ensure_ascii=False),'hint':hint})
     def http_owned(self,identifier,p):
         if p['runtime']['kind']=='docker':
             value=self.docker(['inspect','--format','{{json .State.Running}}|{{.Config.Image}}|{{index .Config.Labels "ubuntu-control.project"}}',self.names(identifier)['container']]).strip()
             return value=='true|'+p.get('image','')+'|'+identifier
         # Keep Netid in ss output, as required by the shared TCP/UDP parser.
-        output=self.h['run'](['/usr/bin/ss','-H','-lntup','sport = :'+str(p['runtime']['port'])])
+        try:output=self.h['run'](['/usr/bin/ss','-H','-lntup','sport = :'+str(p['runtime']['port'])])
+        except (OSError,ValueError):return False
         from publication import Publication
         published=identifier in Publication(self.cfg,self.h).read()['projects']
         unit=self.names(identifier)['unit']
@@ -314,6 +343,7 @@ class Lifecycle:
             p.update(preparedCommit=result['commit'],release=result['release'],deployment='prepared')
             return result
     def deploy(self,identifier,args,start=False):
+        operation_started=time.time()
         p=self.lookup(identifier)
         if p.get('ownership')!='managed':raise ValueError('Configure a managed runtime before activation')
         was_running=p.get('desired')=='running'
@@ -366,8 +396,8 @@ class Lifecycle:
             if not recovery_error:self.finish(identifier)
             secrets=self.secret_values(identifier,old)
             raw=getattr(error,'details',{}) or {'code':'DEPLOY_FAILED','stage':'health-or-build','stderr':str(error),'hint':'The previous release was restored and checked.' if restored else 'Inspect runtime configuration and project logs.'}
-            if not getattr(error,'details',None) and 'project_failure_logs' in self.h:
-                try:raw['stdout']=self.h['project_failure_logs'](self.cfg,identifier)
+            if 'project_failure_logs' in self.h:
+                try:raw['stdout']=raw.get('stdout','')+'\n'+self.h['project_failure_logs'](self.cfg,identifier,since=operation_started)
                 except Exception:pass
             details=clean(raw,secrets)
             if recovery_error:details['hint']='Recovery also failed: '+redact(recovery_error,secrets)

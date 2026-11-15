@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Root-owned, local-only privileged boundary. No shell and no caller-supplied commands."""
-import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib, tempfile
+import os, sys, json, socket, struct, subprocess, re, time, threading, pathlib, ipaddress, shutil, urllib.request, urllib.error, hashlib, tempfile, datetime
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
 from diagnostics import failure,decode,exception_details,OperationError,clean
 from project_lifecycle import Lifecycle,dispatch_lifecycle,READ_ACTIONS,MUTATIONS,REGISTRY_LOCK,BUILD_LOCK,PROJECT_LOCKS,project_lock,rehydrate,recover_transactions
@@ -385,8 +385,13 @@ def github_broker(action,args=None):
     if not result.get('ok'):raise OperationError(result.get('error','GitHub request failed'),result.get('details') or {'code':'GITHUB_BROKER','stage':action})
     return result['data']
 
-def project_failure_logs(cfg,identifier):
+def project_failure_logs(cfg,identifier,since=None):
     records=ProjectLogHub(cfg,globals()).history(identifier)
+    if since is not None:
+        def current(record):
+            try:return datetime.datetime.fromisoformat(record['time']).timestamp()>=since
+            except (ValueError,KeyError,TypeError):return False
+        records=[record for record in records if current(record)]
     return '\n'.join(record['time']+' ['+record['level']+'] '+record['text'] for record in records[-80:])
 
 def build_run(unit,user,group,argv,timeout,input_text=None):

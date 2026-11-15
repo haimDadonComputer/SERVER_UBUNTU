@@ -18,6 +18,11 @@ def node_options(value,guard):
     if any(not re.fullmatch(allowed,flag) for flag in flags):raise ValueError('Unsupported NODE_OPTIONS with managed storage; use only memory/diagnostic options, not custom loaders')
     return '--require='+guard+(' '+' '.join(flags) if flags else '')
 
+def runtime_exit_code(status,stopping=False):
+    # Python reports a signal as a negative number. Passing -SIGTERM to sys.exit
+    # wraps to 241, which systemd labels CONFIGURATION_DIRECTORY incorrectly.
+    return 0 if stopping and status in (0,-signal.SIGTERM,-signal.SIGINT,128+signal.SIGTERM,128+signal.SIGINT) else 128-status if status<0 else status
+
 def launch():
     credentials=pathlib.Path(os.environ['CREDENTIALS_DIRECTORY'])
     config=json.loads((credentials/'launch').read_text())
@@ -59,13 +64,19 @@ def launch():
             target.write(('<3>' if target is sys.stderr else '<6>')+redact(line,known));target.flush()
     threads=[threading.Thread(target=forward,args=(process.stdout,sys.stdout),daemon=True),threading.Thread(target=forward,args=(process.stderr,sys.stderr),daemon=True)]
     for thread in threads:thread.start()
-    signal.signal(signal.SIGTERM,lambda *_:process.terminate())
+    stopping=False
+    def terminate(*_):
+        nonlocal stopping
+        stopping=True
+        try:process.terminate()
+        except ProcessLookupError:pass
+    signal.signal(signal.SIGTERM,terminate)
     if stdin is not None:
         try:process.stdin.write(stdin);process.stdin.close()
         except BrokenPipeError:pass
     status=process.wait()
     for thread in threads:thread.join(3)
-    return status
+    return runtime_exit_code(status,stopping) if runtime['kind']=='node' else status
 
 if __name__=='__main__':
     try:sys.exit(launch())

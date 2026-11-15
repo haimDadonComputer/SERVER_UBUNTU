@@ -3,7 +3,7 @@ from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'helper'))
 from project_storage import Storage,configuration,configured_paths,discover,relative_path,copy_tree,directory,migrate_shared,systemd_state_path
 from project_lifecycle import Lifecycle,validate_runtime
-from runtime_launcher import node_options
+from runtime_launcher import node_options,runtime_exit_code
 
 class StorageDiscoveryTests(unittest.TestCase):
     def setUp(self):
@@ -52,6 +52,13 @@ class StorageDiscoveryTests(unittest.TestCase):
         self.assertEqual(value['storageDirectories'],['data'])
         self.assertIn('--max-old-space-size=256',node_options('--max-old-space-size=256','/trusted/guard.cjs'))
         with self.assertRaises(ValueError):node_options('--require=/uploaded/x.cjs','/trusted/guard.cjs')
+    def test_node_stop_does_not_wrap_sigterm_to_systemd_configuration_failure(self):
+        import signal
+        self.assertEqual(runtime_exit_code(-signal.SIGTERM,True),0)
+        self.assertEqual(runtime_exit_code(128+signal.SIGTERM,True),0)
+        self.assertEqual(runtime_exit_code(1,True),1)
+        self.assertEqual(runtime_exit_code(0),0)
+        self.assertEqual(runtime_exit_code(-signal.SIGTERM),128+signal.SIGTERM)
     def test_generated_unit_only_grants_scoped_storage_access(self):
         cfg={'state_dir':str(self.root/'state')}
         life=Lifecycle(cfg,{})

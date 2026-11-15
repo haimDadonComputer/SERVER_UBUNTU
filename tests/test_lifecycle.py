@@ -177,7 +177,36 @@ class LifecycleTests(unittest.TestCase):
     def test_http_success_from_an_unrelated_process_is_not_healthy(self):
         p=self.managed();response=Mock();response.__enter__=Mock(return_value=Mock(status=200));response.__exit__=Mock(return_value=False)
         with patch.object(self.life,'state',return_value={'active':'active','restarts':'0'}),patch.object(self.life,'http_owned',return_value=False),patch('project_lifecycle.urllib.request.build_opener',return_value=Mock(open=Mock(return_value=response))),patch('project_lifecycle.time.monotonic',side_effect=[0,46]):
-            with self.assertRaises(ValueError):self.life.health('demo',p)
+            with self.assertRaises(OperationError) as caught:self.life.health('demo',p)
+        self.assertEqual(caught.exception.details['code'],'HEALTH_PROBE_UNAVAILABLE')
+        self.assertEqual(caught.exception.details['httpStatus'],200)
+    def test_health_diagnostics_distinguish_wrong_port_and_loopback_binding(self):
+        p=self.managed();self.backend['parse_ss']=helper_backend.parse_ss
+        self.run.return_value='tcp LISTEN 0 511 127.0.0.1:3001 0.0.0.0:* users:(("node",pid=4321,fd=20))'
+        with patch.object(pathlib.Path,'read_text',return_value='0::/system.slice/'+self.life.names('demo')['unit']+'\n'):
+            error=self.life.http_health_failure('demo',p,None,'URLError')
+            self.assertEqual(error.details['code'],'HEALTH_PORT_MISMATCH')
+            observed=json.loads(error.details['stdout']);self.assertEqual(observed['listeners'][0]['port'],3001)
+            self.assertEqual(observed['url'],'http://127.0.0.1:3000/')
+            p['runtime'].update(port=3001,listenAddress='0.0.0.0')
+            self.assertEqual(self.life.http_health_failure('demo',p,200,'').details['code'],'HEALTH_BIND_MISMATCH')
+            p['runtime']['listenAddress']='127.0.0.1'
+            self.assertEqual(self.life.http_health_failure('demo',p,404,'HTTPError').details['code'],'HEALTH_HTTP_STATUS')
+    def test_non_success_http_status_is_reported_without_response_body(self):
+        import urllib.error
+        p=self.managed()
+        failure=urllib.error.HTTPError('http://127.0.0.1:3000/',302,'redirect',{},None)
+        with patch.object(self.life,'state',return_value={'active':'active','restarts':'0'}),patch('project_lifecycle.urllib.request.build_opener',return_value=Mock(open=Mock(side_effect=failure))),patch('project_lifecycle.time.monotonic',side_effect=[0,46]):
+            with self.assertRaises(OperationError) as caught:self.life.health('demo',p)
+        self.assertEqual(caught.exception.details['code'],'HEALTH_HTTP_STATUS');self.assertEqual(caught.exception.details['httpStatus'],302)
+        failure.close()
+    def test_failure_journal_omits_old_attempts_and_invalid_timestamps(self):
+        with patch.object(helper_backend,'ProjectLogHub') as hub:
+            hub.return_value.history.return_value=[{'time':'2026-11-15T01:00:00+00:00','level':'error','text':'old attempt'},{'time':'2026-11-15T15:45:26+00:00','level':'info','text':'current attempt'},{'time':'invalid','level':'error','text':'invalid record'}]
+            import datetime
+            since=datetime.datetime.fromisoformat('2026-11-15T15:45:25+00:00').timestamp()
+            logs=helper_backend.project_failure_logs(self.cfg,'demo',since=since)
+        self.assertIn('current attempt',logs);self.assertNotIn('old attempt',logs);self.assertNotIn('invalid record',logs)
     def test_rehydration_preserves_stopped_state_on_restart_and_obeys_boot_setting(self):
         self.managed();self.registry['demo'].update(release='1-bbbbbbbbbb',desired='stopped')
         original=pathlib.Path.read_text

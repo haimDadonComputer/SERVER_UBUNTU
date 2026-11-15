@@ -180,6 +180,7 @@ for i in {1..20}; do
     echo 'HTTPS dependencies and renewal are ready. Use the publication buttons; no separate preparation command or manual TLS key is required.'
     echo 'Review Project > Runtime settings. Existing projects remain manual and unconverted.'
     echo 'Upload/data mappings are applied on the next explicit project start/deploy. Running projects and their files are not changed by this upgrade.'
+    echo 'Node activation rebuilds protected runtime views with service-readable permissions and prepares data automatically. Legacy shared data is backed up and merged without overwriting private values.'
     echo 'Validate Node/Docker deployment and rollback on a test project before enabling automatic updates.'
     exit 0
   fi

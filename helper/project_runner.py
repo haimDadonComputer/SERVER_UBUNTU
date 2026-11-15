@@ -4,7 +4,7 @@ import os, sys, json, subprocess, pathlib, re, time,shutil,hashlib
 from git_credentials import credentials
 from diagnostics import failure,exception_details,serialize,OperationError
 from job_progress import PREFIX
-from project_storage import discover,configuration,MANIFEST
+from project_storage import discover,configuration,configured_paths,MANIFEST
 
 GITHUB_TOKEN=None
 BUILD_ENV={}
@@ -81,7 +81,7 @@ def status(root):
     if os.environ.get('UC_EXPECTED_REPO') and remote!=os.environ['UC_EXPECTED_REPO']: raise ValueError('Repository differs from the authorized configuration')
     if os.environ.get('UC_EXPECTED_BRANCH') and branch!=os.environ['UC_EXPECTED_BRANCH']: raise ValueError('Branch differs from the authorized configuration')
     current=git(root,'rev-parse','HEAD')
-    storage=discover(root,configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
+    storage=discover(root,configured_paths(root,root,BUILD_CONFIG.get('storageDirectories',[])) if BUILD_CONFIG.get('kind','node')=='node' else configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
     dirty=bool(git(root,'status','--porcelain','--','.',':(exclude)current',':(exclude).control*',':(exclude)shared',*[':(exclude)'+path for path in storage]))
     upstream=git(root,'for-each-ref','--format=%(objectname)','refs/remotes/origin/'+branch)
     return {'repo':remote,'branch':branch,'commit':current,'dirty':dirty,'remoteCommit':upstream or None,'remoteChecked':False}
@@ -126,7 +126,7 @@ def snapshot(root):
     releases=root/'.control-releases';releases.mkdir(exist_ok=True)
     staging=releases/('snapshot-'+str(time.time_ns()));staging.mkdir()
     digest=hashlib.sha256()
-    storage=discover(root,configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
+    storage=discover(root,configured_paths(root,root,BUILD_CONFIG.get('storageDirectories',[])) if BUILD_CONFIG.get('kind','node')=='node' else configuration(root)+BUILD_CONFIG.get('storageDirectories',[]))
     def copy(directory,relative=pathlib.Path()):
         for entry in sorted(directory.iterdir()):
             if entry.name.startswith('.') and entry.name!=MANIFEST or entry.name in ('node_modules','shared','current','data','secrets','credentials') or entry.is_symlink() or entry.suffix.lower() in ('.env','.pem','.key','.sqlite','.db'):continue

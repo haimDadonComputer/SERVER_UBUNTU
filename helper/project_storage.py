@@ -7,6 +7,7 @@ import pathlib
 import re
 import shutil
 import stat
+import uuid
 from project_secrets import atomic_private
 
 UPLOAD_NAMES={'upload','uploads'}
@@ -55,6 +56,14 @@ def configuration(root):
         value=data.get(key,[] if name==MANIFEST else {})
         if name=='package.json':value=value.get('storageDirectories',[]) if isinstance(value,dict) else None
         paths+=validate_directories(value)
+    return paths
+
+
+def configured_paths(root,release,explicit):
+    paths=validate_directories(explicit)+configuration(release)
+    # A code file named data must remain code, not become a writable mount.
+    if all(not (base/'data').exists() or (base/'data').is_dir() for base in (root,release)):
+        paths.append('data')
     return paths
 
 def discover(root,configured=()):
@@ -114,8 +123,9 @@ def directory(path,create=False):
         yield fd
     finally:os.close(fd)
 
-def copy_tree(source,target,*,code=False,skip=(),group=None):
+def copy_tree(source,target,*,code=False,skip=(),group=None,preserve_existing=False):
     """Descriptor-anchored copy. Existing data is never overwritten or removed."""
+    conflicts=[]
     with directory(source) as source_fd,directory(target,True) as target_fd:
         def copy(src,dst,parts=()):
             for entry in os.scandir(src):
@@ -130,12 +140,20 @@ def copy_tree(source,target,*,code=False,skip=(),group=None):
                     if normalized=='..' or normalized.startswith('../') or any(covers(p,normalized) for p in skip):raise ValueError('Code symlink escapes trusted code')
                     os.symlink(link,name,dir_fd=dst);continue
                 if stat.S_ISDIR(info.st_mode):
-                    try:os.mkdir(name,0o750 if code else 0o700,dir_fd=dst)
-                    except FileExistsError:pass
+                    owner=os.fstat(dst)
+                    try:os.mkdir(name,0o750 if code else 0o700,dir_fd=dst);created=True
+                    except FileExistsError:
+                        created=False
+                        existing=os.stat(name,dir_fd=dst,follow_symlinks=False)
+                        if preserve_existing and stat.S_ISREG(existing.st_mode) and existing.st_nlink==1:
+                            conflicts.append(rel);continue
                     a=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=src)
                     b=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=dst)
                     try:
-                        if code and group is not None:os.fchown(b,0,group)
+                        if code:
+                            os.fchmod(b,0o750)
+                            if group is not None:os.fchown(b,0,group)
+                        elif created:os.fchown(b,owner.st_uid,owner.st_gid)
                         copy(a,b,(*parts,name))
                     finally:os.close(a);os.close(b)
                 elif stat.S_ISREG(info.st_mode):
@@ -144,19 +162,26 @@ def copy_tree(source,target,*,code=False,skip=(),group=None):
                     try:
                         opened=os.fstat(a)
                         if (opened.st_ino,opened.st_dev)!=(info.st_ino,info.st_dev):raise ValueError('Source changed during preparation')
-                        try:b=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=dst)
-                        except FileExistsError:
-                            # Identical migration seeds can be merged. Conflicts require operator resolution.
+                        try:os.stat(name,dir_fd=dst,follow_symlinks=False);exists=True
+                        except FileNotFoundError:exists=False
+                        if exists:
+                            # A backed-up legacy merge retains authoritative private data.
+                            if preserve_existing and stat.S_ISDIR(os.stat(name,dir_fd=dst,follow_symlinks=False).st_mode):
+                                conflicts.append(rel);continue
                             existing=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=dst)
                             try:
                                 existing_info=os.fstat(existing)
                                 if not stat.S_ISREG(existing_info.st_mode) or existing_info.st_nlink!=1:raise ValueError('Unsafe existing data: '+rel)
                                 while True:
                                     left=os.read(a,1048576);right=os.read(existing,1048576)
-                                    if left!=right:raise ValueError('Persistent data migration conflict; originals preserved: '+rel)
+                                    if left!=right:
+                                        if preserve_existing:conflicts.append(rel);break
+                                        raise ValueError('Persistent data migration conflict; originals preserved: '+rel)
                                     if not left:break
                             finally:os.close(existing)
                         else:
+                            temporary='.uc-copy-'+uuid.uuid4().hex
+                            b=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=dst)
                             try:
                                 while True:
                                     chunk=os.read(a,1048576)
@@ -167,12 +192,38 @@ def copy_tree(source,target,*,code=False,skip=(),group=None):
                                 if code:
                                     os.fchmod(b,0o750 if info.st_mode&0o111 else 0o640)
                                     if group is not None:os.fchown(b,0,group)
-                            finally:os.close(b)
+                                else:
+                                    owner=os.fstat(dst);os.fchown(b,owner.st_uid,owner.st_gid)
+                                after=os.fstat(a)
+                                if (after.st_size,after.st_mtime_ns)!=(opened.st_size,opened.st_mtime_ns):raise ValueError('Source changed during preparation')
+                                # Publish complete files only, without replacing a concurrently
+                                # created destination. A failed copy cannot become private data.
+                                os.link(temporary,name,src_dir_fd=dst,dst_dir_fd=dst,follow_symlinks=False)
+                                os.fsync(dst)
+                            finally:
+                                os.close(b);os.unlink(temporary,dir_fd=dst)
                         after=os.fstat(a)
                         if (after.st_size,after.st_mtime_ns)!=(opened.st_size,opened.st_mtime_ns):raise ValueError('Source changed during preparation')
                     finally:os.close(a)
                 else:raise ValueError('Special file in project storage/code: '+rel)
         copy(source_fd,target_fd)
+    return conflicts
+
+
+def migrate_shared(source,target,state_dir,identifier):
+    """One-time legacy merge: back up first, keep private values, retain originals."""
+    state=pathlib.Path(state_dir)/'storage-migrations'
+    marker=state/(identifier+'.json')
+    if marker.is_symlink():raise ValueError('Untrusted shared migration record')
+    if marker.exists():return json.loads(marker.read_text())
+    with directory(source) as fd:
+        if not os.listdir(fd):return None
+    backup=state/identifier/uuid.uuid4().hex
+    copy_tree(source,backup)
+    conflicts=copy_tree(backup,target,preserve_existing=True)
+    result={'backup':str(backup),'conflicts':len(conflicts),'completed':True}
+    atomic_private(marker,json.dumps(result))
+    return result
 
 def storage_child(store,relative):
     with directory(store) as parent:
@@ -207,7 +258,7 @@ class Storage:
     def prepare(self,p):
         root=pathlib.Path(p['root']);release=root/'.control-releases'/p['release']
         if not re.fullmatch(r'\d+-[a-f0-9]{10}',p['release']) or release.is_symlink():raise ValueError('Invalid storage release')
-        configured=validate_directories(p['runtime'].get('storageDirectories',[]))+configuration(release)
+        configured=configured_paths(root,release,p['runtime'].get('storageDirectories',[]))
         # Local project configuration also identifies Git-ignored missing runtime directories.
         paths=discover(release,configured)
         paths=sorted(set(paths+discover(root,configured)),key=lambda v:(len(v.split('/')),v))
@@ -245,15 +296,17 @@ class Storage:
         self.code.mkdir(mode=0o750,parents=True,exist_ok=True)
         if self.code.is_symlink() or self.code.stat().st_uid!=0 or self.code.stat().st_mode&0o022:raise ValueError('Unsafe runtime code root')
         os.chown(self.code,0,group);self.code.chmod(0o750)
-        signature=hashlib.sha256(json.dumps({'paths':entries,'runtime':p['runtime']},sort_keys=True).encode()).hexdigest()[:20]
+        # Rebuild pre-fix views on explicit activation; their 0700 directories
+        # were created under the helper's restrictive umask.
+        signature=hashlib.sha256(json.dumps({'projectionVersion':2,'paths':entries,'runtime':p['runtime']},sort_keys=True).encode()).hexdigest()[:20]
         view=self.code/(p['release']+'-'+signature)
         if view.exists():
             if view.is_symlink() or view.stat().st_uid!=0 or view.stat().st_mode&0o022:raise ValueError('Unsafe existing runtime view')
             atomic_private(self.metadata,json.dumps(catalog))
             return {'version':1,'view':str(view),'directories':entries}
-        view.mkdir(mode=0o750);os.chown(view,0,group)
+        view.mkdir(mode=0o750);os.chown(view,0,group);view.chmod(0o750)
         target=view/'.control-releases'/p['release'];target.mkdir(mode=0o750,parents=True)
-        os.chown(target.parent,0,group);os.chown(target,0,group);target.parent.chmod(0o750)
+        os.chown(target.parent,0,group);os.chown(target,0,group);target.parent.chmod(0o750);target.chmod(0o750)
         try:
             copy_tree(release,target,code=True,skip=paths,group=group)
             for path in paths:
@@ -263,7 +316,7 @@ class Storage:
                     for parent in destination.parents:
                         if parent==view:break
                         os.chown(parent,0,group);parent.chmod(0o750)
-            (view/'shared').mkdir(mode=0o750);os.chown(view/'shared',0,group)
+            (view/'shared').mkdir(mode=0o750);os.chown(view/'shared',0,group);(view/'shared').chmod(0o750)
             (view/'current').symlink_to(pathlib.Path('.control-releases')/p['release'])
             # Verify preserved dependency symlinks only after copying the whole tree.
             for directory_path,dirs,files in os.walk(target,followlinks=False):

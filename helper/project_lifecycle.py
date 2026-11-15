@@ -14,7 +14,7 @@ import stat
 from diagnostics import OperationError,clean,redact
 from project_secrets import atomic_private,read_values,patch_values
 from job_progress import emit
-from project_storage import Storage,validate_directories
+from project_storage import Storage,validate_directories,migrate_shared
 
 REGISTRY_LOCK=threading.RLock()
 BUILD_LOCK=threading.Lock()
@@ -236,17 +236,8 @@ class Lifecycle:
             if shared.is_symlink():raise ValueError('Symlink persistent-data paths are prohibited')
             shared.mkdir(mode=0o700,exist_ok=True)
             if any(shared.iterdir()):
-                if any(data.iterdir()):raise ValueError('Persistent data already exists in both source and private state; reconcile before activation')
-                source_fd=os.open(shared,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-                target_fd=os.open(data,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-                moved=[]
-                try:
-                    for name in os.listdir(source_fd):
-                        os.rename(name,name,src_dir_fd=source_fd,dst_dir_fd=target_fd);moved.append(name)
-                except Exception:
-                    for name in reversed(moved):os.rename(name,name,src_dir_fd=target_fd,dst_dir_fd=source_fd)
-                    raise ValueError('Persistent data migration requires a same-filesystem move; no data was discarded') from None
-                finally:os.close(source_fd);os.close(target_fd)
+                migration=migrate_shared(shared,data,self.cfg.get('state_dir','/var/lib/ubuntu-control-helper'),identifier)
+                if migration:emit('storage-prepare',text='Legacy shared data backed up and merged; existing private values retained. Conflicts preserved in root-only backup: '+str(migration['conflicts']))
         else:
             info=json.loads(self.docker(['info','--format','{{json .SecurityOptions}}']))
             if not any('rootless' in str(x) for x in info):raise ValueError('Docker engine must be rootless')
@@ -647,8 +638,9 @@ def rehydrate(cfg,backend):
                 if life.transaction_path(identifier).exists():continue
                 p=life.lookup(identifier)
                 if p.get('ownership')!='managed' or not p.get('release'):continue
-                # A web/helper upgrade must not replace a running unit's namespace.
-                if p.get('desired')=='running' and not new_boot:continue
+                # Same-boot upgrades preserve existing units, including stopped
+                # projects. Storage adoption/migration requires explicit activation.
+                if not new_boot:continue
                 life.provision(identifier,p)
                 if p.get('storage'):life.save(identifier,p)
                 if new_boot and p['runtime']['autostart']:

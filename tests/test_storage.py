@@ -1,7 +1,7 @@
 import copy,json,os,pathlib,stat,sys,tempfile,unittest
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'helper'))
-from project_storage import Storage,configuration,discover,relative_path,copy_tree,directory
+from project_storage import Storage,configuration,configured_paths,discover,relative_path,copy_tree,directory,migrate_shared
 from project_lifecycle import Lifecycle,validate_runtime
 from runtime_launcher import node_options
 
@@ -30,6 +30,12 @@ class StorageDiscoveryTests(unittest.TestCase):
     def test_outer_data_mapping_covers_nested_uploads(self):
         (self.root/'data/nested/uploads').mkdir(parents=True)
         self.assertEqual(discover(self.root,['data']),['data'])
+    def test_conventional_data_is_prepared_without_manual_configuration(self):
+        release=self.root/'release';release.mkdir()
+        self.assertIn('data',configured_paths(self.root,release,[]))
+        (release/'data').write_text('application code')
+        self.assertNotIn('data',configured_paths(self.root,release,[]))
+        self.assertIn('custom/cache',configured_paths(self.root,release,['custom/cache']))
     def test_runtime_validation_and_module_policy_options(self):
         value=validate_runtime({'kind':'node','mode':'entry','entry':'index.mjs','health':'process','storageDirectories':['data']},{'entries':['index.mjs']})
         self.assertEqual(value['storageDirectories'],['data'])
@@ -56,6 +62,44 @@ class StorageCopyTests(unittest.TestCase):
         (self.source/'nested/image').write_bytes(b'changed')
         with self.assertRaises(ValueError):copy_tree(self.source,self.target)
         self.assertEqual((self.target/'nested/image').read_bytes(),b'keep');self.assertEqual((self.source/'nested/image').read_bytes(),b'changed')
+    def test_code_directories_are_group_readable_under_private_helper_umask(self):
+        (self.source/'server/nested').mkdir(parents=True)
+        (self.source/'server/nested/index.js').write_text('code')
+        previous=os.umask(0o077)
+        try:
+            with patch('project_storage.os.fchown'):
+                copy_tree(self.source,self.target,code=True,group=os.getgid())
+        finally:os.umask(previous)
+        self.assertEqual((self.target/'server').stat().st_mode&0o777,0o750)
+        self.assertEqual((self.target/'server/nested').stat().st_mode&0o777,0o750)
+        self.assertEqual((self.target/'server/nested/index.js').stat().st_mode&0o777,0o640)
+    def test_legacy_shared_merges_without_overwriting_or_losing_conflicts(self):
+        (self.source/'conflict').write_text('source original')
+        (self.source/'new').write_text('imported')
+        self.target.mkdir();(self.target/'conflict').write_text('active private value')
+        (self.target/'private-only').write_text('retained')
+        result=migrate_shared(self.source,self.target,self.base/'state','demo')
+        self.assertEqual(result['conflicts'],1)
+        self.assertEqual((pathlib.Path(result['backup'])/'conflict').read_text(),'source original')
+        self.assertEqual((self.source/'conflict').read_text(),'source original')
+        self.assertEqual((self.target/'conflict').read_text(),'active private value')
+        self.assertEqual((self.target/'private-only').read_text(),'retained')
+        self.assertEqual((self.target/'new').read_text(),'imported')
+        (self.target/'new').unlink()
+        self.assertEqual(migrate_shared(self.source,self.target,self.base/'state','demo'),result)
+        self.assertFalse((self.target/'new').exists(),'Restart must not resurrect deleted application data')
+    def test_failed_shared_backup_does_not_mutate_private_data(self):
+        self.target.mkdir();(self.source/'secret-link').symlink_to('/etc')
+        with self.assertRaises(ValueError):migrate_shared(self.source,self.target,self.base/'state','demo')
+        self.assertEqual(list(self.target.iterdir()),[])
+        self.assertFalse((self.base/'state/storage-migrations/demo.json').exists())
+    def test_interrupted_copy_never_publishes_a_partial_destination(self):
+        (self.source/'file').write_text('complete original')
+        with patch('project_storage.os.write',side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):copy_tree(self.source,self.target)
+        self.assertEqual(list(self.target.iterdir()),[])
+        copy_tree(self.source,self.target)
+        self.assertEqual((self.target/'file').read_text(),'complete original')
     def test_copy_rejects_links_special_files_and_swapped_destination(self):
         (self.source/'a').write_text('private');os.link(self.source/'a',self.source/'b')
         with self.assertRaises(ValueError):copy_tree(self.source,self.target)
@@ -74,7 +118,12 @@ class StorageProjectionTests(unittest.TestCase):
             (release/'index.mjs').write_text('initial code');(release/'public/Uploads').mkdir(parents=True);(release/'public/Uploads/photo').write_text('original')
             cfg={'state_dir':str(base/'state'),'storage_dir':str(base/'storage'),'runtime_code_dir':str(base/'code'),'project_group':grp.getgrgid(os.getgid()).gr_name}
             life=Lifecycle(cfg,{});manager=Storage(life,'demo');p={'root':str(root),'release':release.name,'runtime':{'kind':'node','mode':'entry','entry':'index.mjs','storageDirectories':['data']}}
-            first=manager.prepare(p);store=next(e for e in first['directories'] if e['path']=='public/Uploads')['source']
+            previous=os.umask(0o077)
+            try:first=manager.prepare(p)
+            finally:os.umask(previous)
+            for path in (pathlib.Path(first['view']),pathlib.Path(first['view'])/'.control-releases'/release.name):
+                self.assertEqual(path.stat().st_mode&0o777,0o750)
+            store=next(e for e in first['directories'] if e['path']=='public/Uploads')['source']
             pathlib.Path(store,'photo').write_text('edited');pathlib.Path(store,'new').write_text('new data')
             again=manager.prepare(p);self.assertEqual(first['view'],again['view'])
             second=root/'.control-releases/2-bbbbbbbbbb';second.mkdir();(second/'index.mjs').write_text('updated code');(second/'public/Uploads').mkdir(parents=True)

@@ -66,6 +66,9 @@ def main():
     life=Lifecycle(cfg,vars(backend));created=False;failure=None;cleanup_error=None;secret=None;stage='prepare'
     with socket.socket() as probe:probe.bind(('127.0.0.1',0));port=probe.getsockname()[1]
     account=pwd.getpwnam('ubuntu-projects')
+    # Match the production helper, so 0700 code-view regressions cannot hide
+    # behind the operator shell's more permissive default umask.
+    if not args.docker:os.umask(0o077)
     source='''import http from 'node:http';import fs from 'node:fs';import {spawnSync} from 'node:child_process';import {pathToFileURL} from 'node:url';
 const file=process.env.DATA_PATH||process.env.WWEBJS_DATA_PATH+'/../counter';
 const stores=fs.existsSync('public/nested/Uploads')?['public/nested/Uploads','assets/Upload','data']:[];
@@ -92,7 +95,7 @@ res.end(JSON.stringify({version:'VERSION',data:fs.existsSync(file)?fs.readFileSy
         if not args.docker:
             for relative in ('public','public/nested','public/nested/Uploads'):
                 directory=pathlib.Path(project['root'])/relative;directory.mkdir(exist_ok=True);os.chown(directory,account.pw_uid,account.pw_gid);directory.chmod(0o750)
-            runtime['storageDirectories']=['data','assets/Upload']
+            runtime['storageDirectories']=['assets/Upload']
         secret='acceptance-private-'+uuid.uuid4().hex
         if args.docker:
             runtime.update(internalPort=3000,dataPath='/app/shared')

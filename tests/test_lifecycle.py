@@ -183,9 +183,11 @@ class LifecycleTests(unittest.TestCase):
         original=pathlib.Path.read_text
         def read(path,*args,**kwargs):
             return 'test-boot' if path.as_posix().endswith('/proc/sys/kernel/random/boot_id') else original(path,*args,**kwargs)
-        with patch.object(pathlib.Path,'read_text',read),patch.object(Lifecycle,'provision'):
+        with patch.object(pathlib.Path,'read_text',read),patch.object(Lifecycle,'provision') as provision:
             rehydrate(self.cfg,self.backend);self.run.assert_not_called()
+            provision.assert_called_once();provision.reset_mock()
             self.registry['demo']['runtime']['autostart']=True;rehydrate(self.cfg,self.backend);self.run.assert_not_called()
+            provision.assert_not_called()
             (pathlib.Path(self.cfg['state_dir'])/'runtime-boot-id').unlink();rehydrate(self.cfg,self.backend)
         self.assertEqual(self.registry['demo']['desired'],'running');self.run.assert_called_once()
     @unittest.skipUnless(os.name=='posix','Archive ownership checks require POSIX')
@@ -233,9 +235,11 @@ class LifecycleTests(unittest.TestCase):
     @unittest.skipUnless(os.name=='posix','Runtime symlinks require POSIX')
     def test_local_snapshot_builds_isolated_code_and_preserves_private_files(self):
         (self.root/'index.mjs').write_text('console.log("hello")');(self.root/'.env').write_text('secret');(self.root/'shared').mkdir();(self.root/'shared'/'data').write_text('keep')
+        (self.root/'data').mkdir();(self.root/'data/database').write_text('private database')
         with patch.object(runner,'BUILD_CONFIG',{'kind':'node','mode':'entry'}):result=runner.snapshot(self.root)
         release=self.root/'.control-releases'/result['release']
         self.assertTrue((release/'index.mjs').exists());self.assertFalse((release/'.env').exists());self.assertFalse((release/'shared').exists())
         self.assertEqual((release/'index.mjs').stat().st_mode&0o777,0o640);self.assertEqual((self.root/'shared'/'data').read_text(),'keep')
+        self.assertFalse((release/'data').exists());self.assertEqual((self.root/'data/database').read_text(),'private database')
 
 if __name__=='__main__':unittest.main()

@@ -65,7 +65,13 @@ for pair in 'publication-helper.conf ubuntu-control-helper.service.d/30-publicat
   destination=/etc/systemd/system/$target
   [[ ! -L $destination ]] || { echo "Unsafe unit symlink: $destination"; exit 1; }
   if [[ -e $destination ]] && ! cmp -s "$SOURCE_DIR/deploy/$template" "$destination"; then
-    echo "Custom unit differs: $destination. Reconcile it manually."; exit 1
+    # Accept only the exact former managed publication drop-in. Arbitrary
+    # operator overrides still require review, and upgrade.sh backs this up.
+    if [[ $template == publication-helper.conf && $(cat "$destination") == $'[Service]\nReadWritePaths=/etc/nginx/ubuntu-control /etc/ubuntu-control-publication' ]]; then
+      install -m 0600 "$destination" /etc/ubuntu-control-publication/previous-publication-helper.conf
+    else
+      echo "Custom unit differs: $destination. Reconcile it manually."; exit 1
+    fi
   fi
   install -m 0644 "$SOURCE_DIR/deploy/$template" "$destination"
 done

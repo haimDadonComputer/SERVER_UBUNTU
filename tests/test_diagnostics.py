@@ -6,6 +6,10 @@ import helper as h
 import project_runner as r
 
 class DiagnosticTests(unittest.TestCase):
+    def test_nginx_bind_permission_is_not_reported_as_file_permissions(self):
+        code,message,hint=d.identify('nginx: [emerg] bind() to 169.58.146.11:80 failed (13: Permission denied)')
+        self.assertEqual(code,'NGINX_BIND_PERMISSION');self.assertIn('CAP_NET_BIND_SERVICE',hint)
+        self.assertNotIn('chmod 777',hint)
     def test_sensitive_material_is_removed_before_output_truncation(self):
         text='ghs_123.jwt.payload Bearer abcdef password="two word secret" https://user:pass@github.com/a/b opaque-credential\n-----BEGIN RSA PRIVATE KEY-----\nKEY CONTENT\n-----END RSA PRIVATE KEY-----'
         result=d.redact(text,('opaque-credential',))

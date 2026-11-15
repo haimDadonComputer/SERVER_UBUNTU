@@ -5,6 +5,12 @@ from publication import Publication,dispatch_publication
 from project_secrets import parse_import,patch_values,read_values
 
 class PublicationTests(unittest.TestCase):
+    def test_privileged_bind_capability_is_scoped_to_publication_helper(self):
+        root=pathlib.Path(__file__).resolve().parents[1]
+        settings=(root/'deploy/publication-helper.conf').read_text().splitlines()
+        self.assertEqual([line for line in settings if line.startswith('CapabilityBoundingSet=')],['CapabilityBoundingSet=CAP_NET_BIND_SERVICE'])
+        self.assertNotIn('AmbientCapabilities=', '\n'.join(settings))
+        self.assertIn('CapabilityBoundingSet=',(root/'deploy/ubuntu-control.service').read_text().splitlines())
     def test_management_redirect_keeps_acme_path_and_requires_valid_tls(self):
         data=self.pub.read();data['management']=True
         challenge=self.pub.challenge(data)

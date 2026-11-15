@@ -34,6 +34,8 @@ def clean(details,secrets=()):
 
 def identify(stderr):
     text=str(stderr).lower()
+    if 'nginx:' in text and 'bind()' in text and 'permission denied' in text:
+        return 'NGINX_BIND_PERMISSION','בדיקת Nginx חסומה בפתיחת פורט רשת.','שדרגו דרך scripts/upgrade.sh כדי להתקין את הרשאת CAP_NET_BIND_SERVICE של רכיב הפרסום ולהפעיל מחדש את ה־helper. אין לשנות הרשאות קבצים או לתת הרשאות למשתמש ה־Web.'
     cases=[
       (('cannot set groups','failed to set uid','cannot open session','cannot set user'),'RUNUSER_IDENTITY','לא ניתן לעבור למשתמש הפרויקטים.','בדקו משתמש מערכת, קבוצות ויומן helper; אין להרחיב capabilities לפני אבחון.'),
       (('permission denied (publickey)',),'SSH_AUTH_FAILED','אימות SSH למאגר נכשל.','בדקו Deploy Key ו־known_hosts של משתמש הפרויקטים, או בחרו ייבוא באמצעות GitHub App.'),

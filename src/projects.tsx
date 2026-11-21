@@ -58,6 +58,7 @@ export function ProjectActions({
     onFiles,
     onEnvironment,
     children,
+    serviceState = 'unknown',
 }: {
     project: Data;
     api: Api;
@@ -73,14 +74,13 @@ export function ProjectActions({
     onFiles?: () => void;
     onEnvironment?: () => void;
     children?: React.ReactNode;
+    serviceState?: string;
 }) {
     const [modal, setModal] = useState(''),
         [requestBusy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null),
-        [typed, setTyped] = useState(''),
-        [password, setPassword] = useState(''),
-        [code, setCode] = useState('');
+        [typed, setTyped] = useState('');
     const [launchUrl, setLaunchUrl] = useState(p.launch_url || '');
     const [pendingJob, setPendingJob] = useState<Data | null>(null);
     const running = jobs.find(
@@ -92,6 +92,39 @@ export function ProjectActions({
         (job) => job.resource === 'project:' + p.id && job.action === 'network-project'
     );
     const busy = requestBusy || !!activeJob || !!p.recoveryPending;
+    const trackedAction = useRef<string | null>(null);
+    useEffect(() => {
+        if (activeJob) {
+            trackedAction.current = activeJob.id;
+            return;
+        }
+        if (
+            trackedAction.current &&
+            jobs.some(
+                (job) =>
+                    job.id === trackedAction.current && !['queued', 'running'].includes(job.status)
+            )
+        ) {
+            trackedAction.current = null;
+            void refresh();
+        }
+    }, [activeJob?.id, jobs]);
+    const processRunning = ['active', 'running'].includes(serviceState);
+    const canStop = !!p.service && ['active', 'running', 'activating'].includes(serviceState);
+    const canRestart = !!p.runtime && processRunning;
+    const publicationReason =
+        !p.runtime || p.ownership !== 'managed'
+            ? 'נדרשת סביבת הפעלה מנוהלת'
+            : p.runtime.health !== 'http' || !p.runtime.port
+              ? 'נדרש פרויקט Web עם פורט מוגדר'
+              : (p.runtime.listenAddress || '127.0.0.1') !== '127.0.0.1'
+                ? 'יש לבחור האזנה מקומית בהגדרות ההפעלה לפני פרסום'
+                : !processRunning
+                  ? 'יש להפעיל את הפרויקט ולאמת את מצבו לפני פרסום'
+                  : '';
+    const serverIp =
+        serverAddresses.find((entry) => entry.interface === 'configured-public')?.address ||
+        serverAddresses[0]?.address;
     useEffect(() => {
         if (observed && !['queued', 'running'].includes(observed.status)) setPendingJob(null);
     }, [observed?.status]);
@@ -107,6 +140,7 @@ export function ProjectActions({
                             previous ? { ...previous, ...result.job } : null
                         );
                     else {
+                        trackedAction.current = null;
                         setPendingJob(null);
                         void refresh();
                     }
@@ -164,6 +198,12 @@ export function ProjectActions({
     return (
         <>
             <div className="project-access-summary">
+                <div className="project-server-ip" dir="ltr">
+                    IP: {serverIp || 'לא זמין'}
+                    {publication?.port || p.runtime?.port
+                        ? ` · Port: ${publication?.port || p.runtime.port}`
+                        : ''}
+                </div>
                 <span
                     className={
                         'publication-badge ' +
@@ -235,7 +275,8 @@ export function ProjectActions({
                         <div className="project-primary-actions">
                             <button
                                 className="secondary"
-                                disabled={busy}
+                                disabled={busy || (!publication && !!publicationReason)}
+                                title={!publication ? publicationReason : 'ניהול הפרסום הקיים'}
                                 onClick={() => setModal('publication')}
                             >
                                 <ExternalLink size={14} />
@@ -251,7 +292,12 @@ export function ProjectActions({
                             </button>
                             <button
                                 className="secondary"
-                                disabled={busy || !p.service}
+                                disabled={busy || !canStop}
+                                title={
+                                    !canStop
+                                        ? 'עצירה זמינה רק לתהליך שפועל או נמצא בהפעלה'
+                                        : undefined
+                                }
                                 onClick={() => setModal('stop')}
                             >
                                 <Square size={14} />
@@ -259,7 +305,12 @@ export function ProjectActions({
                             </button>
                             <button
                                 className="secondary"
-                                disabled={busy || !p.runtime}
+                                disabled={busy || !canRestart}
+                                title={
+                                    !canRestart
+                                        ? 'הפעלה מחדש זמינה רק לפרויקט פועל; לפרויקט כבוי השתמשו בהפעלת פרויקט'
+                                        : undefined
+                                }
                                 onClick={() => setModal('restart')}
                             >
                                 <RotateCw size={14} />
@@ -299,7 +350,9 @@ export function ProjectActions({
                             <div className="project-controls lifecycle-actions">
                                 <button
                                     className="primary"
-                                    disabled={busy}
+                                    disabled={
+                                        busy || processRunning || serviceState === 'activating'
+                                    }
                                     onClick={() => setModal(p.runtime ? 'start' : 'runtime')}
                                 >
                                     <Play size={15} />
@@ -415,6 +468,8 @@ export function ProjectActions({
                         totpEnabled={totpEnabled}
                         project={p}
                         lastJob={publicationJob}
+                        canPublish={!publicationReason}
+                        unavailableReason={publicationReason}
                         onQueued={onQueued}
                     />
                 </Popup>
@@ -544,8 +599,6 @@ export function ProjectActions({
                                 void action('', 'DELETE', {
                                     confirmed: true,
                                     confirmName: typed,
-                                    password,
-                                    ...(totpEnabled ? { code } : {}),
                                 });
                             else
                                 void action(modal, 'POST', {
@@ -563,29 +616,6 @@ export function ProjectActions({
                                     onChange={(e) => setTyped(e.target.value)}
                                 />
                             </label>
-                        )}
-                        {modal === 'purge' && (
-                            <>
-                                <label>
-                                    סיסמה נוכחית
-                                    <input
-                                        required
-                                        type="password"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                    />
-                                </label>
-                                {totpEnabled && (
-                                    <label>
-                                        קוד אימות
-                                        <input
-                                            required
-                                            value={code}
-                                            onChange={(e) => setCode(e.target.value)}
-                                        />
-                                    </label>
-                                )}
-                            </>
                         )}
                         {error && (
                             <div className="alert error">
@@ -1013,34 +1043,45 @@ export function ProjectEnvironment({
     const [importNames, setImportNames] = useState<string[]>([]);
     const [metadata, setMetadata] = useState<Data>({ keys: [], publicBuild: [] }),
         [rows, setRows] = useState<Data[]>([]),
-        [password, setPassword] = useState(''),
-        [code, setCode] = useState(''),
+        [loaded, setLoaded] = useState(false),
         [busy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null);
+    function applyEnvironment(data: Data) {
+        setLoaded(true);
+        setMetadata(data);
+        setRows(
+            data.keys.map((name: string) => ({
+                name,
+                value: data.values[name] || '',
+                initial: data.values[name] || '',
+                remove: false,
+                public: data.publicBuild.includes(name),
+            }))
+        );
+    }
     useEffect(() => {
-        api(`/projects/${project.id}/env`)
+        let stopped = false;
+        api(`/projects/${project.id}/env/reveal`, 'POST', {})
             .then((data) => {
-                setMetadata(data);
-                setRows(
-                    data.keys.map((name: string) => ({
-                        name,
-                        value: '',
-                        remove: false,
-                        public: data.publicBuild.includes(name),
-                    }))
-                );
+                if (!stopped) applyEnvironment(data);
             })
             .catch((e) => {
-                setError(e.message);
-                setDetails(e.details);
+                if (!stopped) {
+                    setError(e.message);
+                    setDetails(e.details);
+                }
             });
+        return () => {
+            stopped = true;
+        };
     }, [project.id]);
     function change(index: number, key: string, value: any) {
         setRows(rows.map((r, i) => (i === index ? { ...r, [key]: value } : r)));
     }
     return (
         <Popup title="משתני סביבה מוגנים" onClose={close}>
+            {!loaded && !error && <p role="status">טוען משתני סביבה…</p>}
             <label>
                 העלאת קובץ ENV (מיזוג)
                 <input
@@ -1085,10 +1126,7 @@ export function ProjectEnvironment({
                             )
                             .join(', ')}
                     </p>
-                    <p>
-                        הערכים יישמרו לריצה בלבד. משתנים אחרים יישמרו. השמירה מחייבת אימות בהמשך
-                        הטופס.
-                    </p>
+                    <p>הערכים יישמרו לריצה בלבד. משתנים אחרים יישמרו.</p>
                     <button
                         type="button"
                         onClick={() => {
@@ -1101,10 +1139,11 @@ export function ProjectEnvironment({
                 </div>
             )}
             <p className="muted">
-                הערכים הקיימים אינם מוחזרים לדפדפן. שדה ריק משאיר ערך קיים ללא שינוי. סודות נשמרים
+                הערכים מוצגים למנהל המחובר במסך זה. שדה ריק משאיר ערך קיים ללא שינוי. משתנים נשמרים
                 לריצה בלבד; סימון ציבורי לבנייה עלול להכניס ערך לקובצי Frontend.
             </p>
             <form
+                autoComplete="off"
                 onSubmit={async (e) => {
                     e.preventDefault();
                     setBusy(true);
@@ -1117,7 +1156,8 @@ export function ProjectEnvironment({
                             if (!row.name) continue;
                             if (row.remove) unset.push(row.name);
                             else {
-                                if (row.value !== '') set[row.name] = row.value;
+                                if (row.value !== '' && row.value !== row.initial)
+                                    set[row.name] = row.value;
                                 if (row.public) publicBuild.push(row.name);
                             }
                         }
@@ -1125,28 +1165,18 @@ export function ProjectEnvironment({
                             importText !== null
                                 ? await api(`/projects/${project.id}/env/import`, 'POST', {
                                       text: importText,
-                                      password,
-                                      ...(totpEnabled ? { code } : {}),
                                   })
                                 : await api(`/projects/${project.id}/env`, 'PATCH', {
                                       set,
                                       unset,
                                       publicBuild,
-                                      password,
-                                      ...(totpEnabled ? { code } : {}),
                                   });
                         setMetadata(result);
                         setImportText(null);
                         setImportNames([]);
-                        setPassword('');
-                        setCode('');
-                        setRows(
-                            result.keys.map((name: string) => ({
-                                name,
-                                value: '',
-                                remove: false,
-                                public: result.publicBuild.includes(name),
-                            }))
+                        setRows([]);
+                        applyEnvironment(
+                            await api(`/projects/${project.id}/env/reveal`, 'POST', {})
                         );
                     } catch (e) {
                         setError((e as Error).message);
@@ -1167,10 +1197,16 @@ export function ProjectEnvironment({
                             pattern="[A-Z][A-Z0-9_]{0,63}"
                         />
                         <input
-                            aria-label={'ערך חדש ' + row.name}
-                            type="password"
+                            aria-label={'ערך ' + row.name}
+                            type="text"
+                            name={'project-env-value-' + project.id + '-' + i}
                             autoComplete="off"
-                            placeholder="ללא שינוי"
+                            autoCapitalize="none"
+                            spellCheck={false}
+                            data-lpignore="true"
+                            data-1p-ignore="true"
+                            data-bwignore="true"
+                            placeholder="ערך המשתנה"
                             value={row.value}
                             onChange={(e) => change(i, 'value', e.target.value)}
                         />
@@ -1201,22 +1237,7 @@ export function ProjectEnvironment({
                 >
                     הוספת משתנה
                 </button>
-                <label>
-                    סיסמה נוכחית
-                    <input
-                        required
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                    />
-                </label>
-                {totpEnabled && (
-                    <label>
-                        קוד אימות
-                        <input required value={code} onChange={(e) => setCode(e.target.value)} />
-                    </label>
-                )}
-                <button className="primary" disabled={busy}>
+                <button className="primary" disabled={busy || !loaded}>
                     שמירת משתני סביבה
                 </button>
                 {metadata.restartRequired && (

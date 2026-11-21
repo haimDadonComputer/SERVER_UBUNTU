@@ -7,7 +7,7 @@ import http from 'node:http';
 import argon2 from 'argon2';
 import { createApp } from '../server/app.mjs';
 import { openDatabase } from '../server/db.mjs';
-test('GitHub routes require authentication, CSRF and reauthentication; imports use queued scoped actions', async (t) => {
+test('GitHub routes require authentication and CSRF without repeated credentials; imports use queued scoped actions', async (t) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-github-api-')),
         db = openDatabase(dir);
     db.prepare('INSERT INTO users(username,password) VALUES(?,?)').run(
@@ -101,7 +101,7 @@ test('GitHub routes require authentication, CSRF and reauthentication; imports u
                 password: 'wrong',
             })
         ).status,
-        403
+        200
     );
     assert.equal(
         (

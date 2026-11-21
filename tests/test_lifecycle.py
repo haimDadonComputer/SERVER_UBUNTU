@@ -114,6 +114,11 @@ class LifecycleTests(unittest.TestCase):
     def test_read_only_records_hide_credentials_and_internal_archive_paths(self):
         self.managed();self.registry['demo'].update(archive={'code':'SECRET-PATH'},publicBuild=['PUBLIC_URL'])
         self.assertNotIn('SECRET-PATH',json.dumps(dispatch_lifecycle(self.cfg,'project-records',{},self.backend)))
+    def test_values_are_only_returned_by_dedicated_environment_reveal(self):
+        self.managed();patch_values(self.life.env_path('demo'),{'API_KEY':'private-test-value'})
+        self.assertNotIn('private-test-value',json.dumps(self.life.metadata('demo')))
+        self.assertNotIn('private-test-value',json.dumps(dispatch_lifecycle(self.cfg,'project-records',{},self.backend)))
+        self.assertEqual(dispatch_lifecycle(self.cfg,'project-env-values',{'project':'demo'},self.backend)['values'],{'API_KEY':'private-test-value'})
     def test_project_lock_rejects_duplicate_work(self):
         with project_lock('demo'):
             with self.assertRaises(OperationError):

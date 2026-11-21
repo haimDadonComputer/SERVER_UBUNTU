@@ -7,8 +7,6 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
     const [state, setState] = useState<Data>({}),
         [appId, setAppId] = useState(''),
         [installationId, setInstallationId] = useState(''),
-        [password, setPassword] = useState(''),
-        [code, setCode] = useState(''),
         [busy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null),
@@ -34,8 +32,6 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
                     await api('/github/configure', 'POST', {
                         appId,
                         installationId,
-                        password,
-                        ...(totpEnabled ? { code } : {}),
                     })
                 );
             if (action === 'check') update(await api('/github/check', 'POST', {}));
@@ -44,16 +40,9 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
                 setNotice(`רשימת המאגרים רועננה: ${repos.length} מאגרים זמינים להתקנה.`);
             }
             if (action === 'disconnect') {
-                update(
-                    await api('/github/disconnect', 'POST', {
-                        password,
-                        ...(totpEnabled ? { code } : {}),
-                    })
-                );
+                update(await api('/github/disconnect', 'POST', {}));
                 setNotice('החיבור נותק מקומית.');
             }
-            setPassword('');
-            setCode('');
         } catch (e) {
             setError((e as Error).message);
             setDetails((e as Data).details || null);
@@ -120,28 +109,8 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
                     רק שירות GitHub הייעודי קורא את המפתח. בחירת All repositories מתבצעת בהתקנה
                     ב־GitHub; כאן מוצגים כל המאגרים הזמינים לה.
                 </p>
-                <label>
-                    סיסמה נוכחית לשמירה או ניתוק
-                    <input
-                        type="password"
-                        autoComplete="current-password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                    />
-                </label>
-                {totpEnabled && (
-                    <label>
-                        קוד אימות דו־שלבי
-                        <input
-                            autoComplete="one-time-code"
-                            value={code}
-                            maxLength={6}
-                            onChange={(e) => setCode(e.target.value)}
-                        />
-                    </label>
-                )}
                 <div className="project-controls">
-                    <button className="primary" disabled={busy || !password}>
+                    <button className="primary" disabled={busy}>
                         שמירת חיבור
                     </button>
                     <button
@@ -164,7 +133,7 @@ export function GitHubSettings({ totpEnabled, api }: { totpEnabled: boolean; api
                     <button
                         type="button"
                         className="text-btn"
-                        disabled={busy || !state.enabled || !password}
+                        disabled={busy || !state.enabled}
                         onClick={() => void execute('disconnect')}
                     >
                         ניתוק GitHub App

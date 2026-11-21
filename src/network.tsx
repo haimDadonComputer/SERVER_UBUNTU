@@ -9,18 +9,20 @@ export function NetworkSettings({
     project,
     onQueued,
     lastJob,
+    canPublish = false,
+    unavailableReason = '',
 }: {
     api: Api;
     totpEnabled: boolean;
     project?: Data;
     onQueued?: () => void;
     lastJob?: Data;
+    canPublish?: boolean;
+    unavailableReason?: string;
 }) {
     const [state, setState] = useState<Data | null>(null),
         [fields, setFields] = useState<Data>({ ip: '', domain: '', email: '' });
-    const [password, setPassword] = useState(''),
-        [code, setCode] = useState(''),
-        [requestBusy, setBusy] = useState(false),
+    const [requestBusy, setBusy] = useState(false),
         [error, setError] = useState(''),
         [details, setDetails] = useState<Data | null>(null),
         [notice, setNotice] = useState('');
@@ -95,7 +97,16 @@ export function NetworkSettings({
                 if (p) {
                     setPort(p.port);
                     setHttps(p.https);
-                    setDomain(p.domain || '');
+                    setDomain(
+                        (p.domain || '').endsWith(
+                            '.' + (data.projectDomainSuffix || 'haimdadon.co.il')
+                        )
+                            ? p.domain.slice(
+                                  0,
+                                  -(data.projectDomainSuffix || 'haimdadon.co.il').length - 1
+                              )
+                            : p.domain || ''
+                    );
                 }
             })
             .catch((e) => setError(e.message));
@@ -109,11 +120,7 @@ export function NetworkSettings({
         try {
             const result = await api(path, method, {
                 ...body,
-                password,
-                ...(totpEnabled ? { code } : {}),
             });
-            setPassword('');
-            setCode('');
             setConfirmed(false);
             setNotice(result.job ? 'הפעולה מתבצעת; המצב יתעדכן כאן אוטומטית.' : 'ההגדרות נשמרו');
             if (result.job) {
@@ -129,6 +136,8 @@ export function NetworkSettings({
         }
     }
     const publication = project && state?.projects?.[project.id];
+    const domainSuffix = state?.projectDomainSuffix || 'haimdadon.co.il';
+    const fullDomain = domain ? (domain.includes('.') ? domain : domain + '.' + domainSuffix) : '';
     return (
         <section className="panel network-settings">
             <div className="panel-heading">
@@ -181,13 +190,18 @@ export function NetworkSettings({
                         <input
                             value={domain}
                             onChange={(e) => setDomain(e.target.value.trim().toLowerCase())}
-                            placeholder="forms-prompt.haimdadon.co.il"
+                            placeholder="X"
+                            autoComplete="off"
+                            dir="ltr"
                         />
+                        <small dir="ltr">
+                            {domain.includes('.') ? 'כתובת מלאה' : '.' + domainSuffix}
+                        </small>
                     </label>
                     {domain && (
                         <p>
-                            נדרשת רשומת A אל {state?.ip}. הפרויקט יפורסם ב־https://{domain}/ בפורט
-                            443, בנפרד מדומיין הניהול.
+                            נדרשת רשומת A אל {state?.ip}. הפרויקט יפורסם ב־https://{fullDomain}/
+                            בפורט 443, בנפרד מדומיין הניהול.
                         </p>
                     )}
                     <label>
@@ -251,25 +265,6 @@ export function NetworkSettings({
                     <pre className="code">{state?.renewal}</pre>
                 </>
             )}
-            <label>
-                סיסמה נוכחית
-                <input
-                    type="password"
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                />
-            </label>
-            {totpEnabled && (
-                <label>
-                    קוד TOTP
-                    <input
-                        inputMode="numeric"
-                        value={code}
-                        onChange={(e) => setCode(e.target.value)}
-                    />
-                </label>
-            )}
             <label className="checkbox-label">
                 <input
                     type="checkbox"
@@ -281,21 +276,22 @@ export function NetworkSettings({
             {project ? (
                 <div className="project-controls">
                     <button
-                        disabled={busy || !confirmed || !password}
+                        disabled={busy || !confirmed || !canPublish}
+                        title={unavailableReason}
                         onClick={() =>
                             void submit(`/projects/${project.id}/publication`, 'POST', {
                                 enabled: true,
                                 confirmed: true,
                                 port: domain ? 443 : port,
                                 https: !!domain || https,
-                                domain,
+                                domain: fullDomain,
                             })
                         }
                     >
                         פתיחה לאינטרנט
                     </button>
                     <button
-                        disabled={busy || !confirmed || !password || !publication}
+                        disabled={busy || !confirmed || !publication}
                         onClick={() =>
                             void submit(`/projects/${project.id}/publication`, 'POST', {
                                 enabled: false,
@@ -309,13 +305,13 @@ export function NetworkSettings({
             ) : (
                 <div className="project-controls">
                     <button
-                        disabled={busy || !password}
+                        disabled={busy}
                         onClick={() => void submit('/network', 'PATCH', fields)}
                     >
                         שמירת כתובות
                     </button>
                     <button
-                        disabled={busy || !password || !confirmed || !state?.domain}
+                        disabled={busy || !confirmed || !state?.domain}
                         onClick={() =>
                             void submit('/network/management', 'POST', {
                                 enabled: true,
@@ -327,7 +323,7 @@ export function NetworkSettings({
                         הפעלת ניהול ציבורי
                     </button>
                     <button
-                        disabled={busy || !password || !confirmed || !state?.management}
+                        disabled={busy || !confirmed || !state?.management}
                         onClick={() =>
                             void submit('/network/management', 'POST', {
                                 enabled: false,
@@ -340,7 +336,7 @@ export function NetworkSettings({
                     {['ip', 'management'].map((kind) => (
                         <button
                             key={kind}
-                            disabled={busy || !password || !confirmed}
+                            disabled={busy || !confirmed}
                             onClick={() =>
                                 void submit('/network/certificates/test', 'POST', {
                                     kind,

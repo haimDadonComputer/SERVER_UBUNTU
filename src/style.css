@@ -2268,3 +2268,11 @@ footer span:first-child {
 .publication-failure > p {
     margin: 4px 0;
 }
+.project-server-ip {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    overflow-wrap: anywhere;
+    text-align: start;
+}

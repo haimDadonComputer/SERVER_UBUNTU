@@ -180,6 +180,11 @@ class PublicationTests(unittest.TestCase):
         self.pub.publish('demo',{'enabled':False,'confirmed':True})
         self.assertEqual(unrelated.read_text(),'operator content');self.assertEqual(self.pub.read()['projects'],{})
         self.assertFalse(self.pub.path('challenge.conf').exists())
+    def test_short_domain_expands_and_full_domain_remains_compatible(self):
+        with patch.object(self.pub,'interfaces'),patch('publication.socket.getaddrinfo',return_value=[(2,1,6,'',('8.8.8.8',443))]):
+            data=self.pub.publish('demo',{'enabled':True,'confirmed':True,'domain':'forms'})
+        self.assertEqual(data['projects']['demo']['domain'],'forms.haimdadon.co.il')
+        self.assertEqual(data['projects']['demo']['url'],'https://forms.haimdadon.co.il/')
     def test_proxy_validation_failure_restores_files_and_state(self):
         before=self.pub.read();self.pub.write('management.conf','old site')
         failed=False

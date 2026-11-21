@@ -118,6 +118,11 @@ class Lifecycle:
     def metadata(self,identifier):
         p=self.lookup(identifier);values=read_values(self.env_path(identifier))
         return {'keys':sorted(values),'publicBuild':p.get('publicBuild',[]),'restartRequired':p.get('envPending',False),'buildRequired':p.get('runtimePending',False)}
+    def environment_values(self,identifier):
+        # Dedicated authenticated/CSRF-protected reveal path only. Never add
+        # values to project records, ordinary metadata, progress or audit data.
+        p=self.lookup(identifier);values=read_values(self.env_path(identifier))
+        return {'keys':sorted(values),'publicBuild':p.get('publicBuild',[]),'restartRequired':p.get('envPending',False),'buildRequired':p.get('runtimePending',False),'values':values}
     def identifier(self,p):return p['service'][3:] if p.get('ownership')=='managed' else next((key for key,value in self.h['all_projects'](self.cfg).items() if value['root']==p['root']),pathlib.Path(p['root']).name)
     def metadata_values(self,p):
         identifier=self.identifier(p)
@@ -568,7 +573,7 @@ class Lifecycle:
             unit.unlink(missing_ok=True);self.h['run'](['/usr/bin/systemctl','daemon-reload'])
         p.update(lifecycle='deleted',updates='manual',desired='stopped');p.pop('archive',None);result=self.save(identifier,p,True);self.finish(identifier);return result
 
-READ_ACTIONS={'project-options','project-env-meta','project-records','project-state','project-head'}
+READ_ACTIONS={'project-options','project-env-meta','project-env-values','project-records','project-state','project-head'}
 MUTATIONS={'project-runtime','project-env-patch','project-updates','project-start','project-stop','project-restart','project-enable','project-disable','project-archive','project-restore','project-purge','project-activate'}
 
 def dispatch_lifecycle(cfg,action,args,backend):
@@ -577,6 +582,7 @@ def dispatch_lifecycle(cfg,action,args,backend):
     identifier=backend['project_identifier'](args.get('project'))
     if action=='project-options':return life.options(identifier)
     if action=='project-env-meta':return life.metadata(identifier)
+    if action=='project-env-values':return life.environment_values(identifier)
     if action=='project-head':return life.head(identifier,args)
     if action=='project-state':
         p=life.lookup(identifier,True);return {**life.public(identifier,p),'observed':life.state(p) if p.get('lifecycle','active')=='active' else {'active':'archived'}}

@@ -18,7 +18,7 @@ from job_progress import emit
 from diagnostics import OperationError,exception_details
 
 NETWORK_LOCK=threading.RLock()
-DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[]}
+DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[],'projectDomainSuffix':'haimdadon.co.il'}
 
 def valid_domain(value):
     return isinstance(value,str) and len(value)<=253 and re.fullmatch(r'(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}',value)
@@ -290,6 +290,11 @@ class Publication:
                 except (OSError,KeyError):owned=False
                 if not owned:raise ValueError('The existing localhost listener does not belong to this managed project')
             domain=args.get('domain','')
+            if isinstance(domain,str) and domain and '.' not in domain:
+                if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?',domain):raise ValueError('Invalid project subdomain')
+                suffix=data.get('projectDomainSuffix',DEFAULT['projectDomainSuffix'])
+                if not valid_domain(suffix):raise ValueError('Invalid project domain suffix')
+                domain=domain+'.'+suffix
             if domain:
                 if not valid_domain(domain):raise ValueError('Invalid project domain; enter a hostname without scheme, port or path')
                 if domain==data['domain'] or domain.endswith('.'+data['domain']) and data['domain']:raise ValueError('Project domain must be separate from the management hostname')

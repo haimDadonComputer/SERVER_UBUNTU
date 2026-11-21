@@ -112,6 +112,12 @@
             "verification": "Node/build and focused Edge DOM checks passed. Mocked publication tests cover HTTP/TLS failures, rollback, probe availability and primary-error preservation. Ubuntu integration and actual Internet reachability remain unverified; the supplied newer restart log is successful."
         },
         {
+            "id": "session-actions-visible-environment-and-project-access",
+            "status": "implemented",
+            "description": "Use the authenticated session without repeated action credentials; reveal environment values only through a dedicated no-store CSRF-protected endpoint; suppress password autofill; gate project controls by observed state; expand short project subdomains and show server IP/port beside domain links",
+            "verification": "28 Node tests passed; Python helper checks ran 146 tests (131 passed, 15 platform skips); production build passed. Two focused Edge DOM scenarios passed, including visible persisted values, no repeated password fields, inactive controls, completion-state refresh and short-domain expansion. Ubuntu integration remains unverified."
+        },
+        {
             "id": "ubuntu-live-validation",
             "status": "pending",
             "reason": "No Ubuntu server connection provided"

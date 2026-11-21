@@ -162,32 +162,14 @@ export async function createApp({ db, config, helper }) {
         res.clearCookie('uc_session', cookieOptions);
         res.json({ ok: true });
     });
-    async function reauth(req) {
-        const password = z.string().min(1).max(256).parse(req.body.password);
-        const u = db.prepare('SELECT * FROM users WHERE id=?').get(req.session.user_id);
-        if (!(await argon2.verify(u.password, password)))
-            throw Object.assign(new Error('הסיסמה הנוכחית אינה תקינה'), { status: 403 });
-        if (u.totp) {
-            const code = z
-                .string()
-                .regex(/^\d{6}$/)
-                .parse(req.body.code);
-            const delta = totp(unseal(u.totp, config.key)).validate({ token: code, window: 1 });
-            const step = Math.floor(Date.now() / 30000) + (delta ?? 0);
-            if (delta === null || step <= u.last_totp)
-                throw Object.assign(new Error('קוד אימות אינו תקין או שכבר נעשה בו שימוש'), {
-                    status: 403,
-                });
-            const updated = db
-                .prepare('UPDATE users SET last_totp=? WHERE id=? AND last_totp<?')
-                .run(step, u.id, step);
-            if (updated.changes !== 1)
-                throw Object.assign(new Error('קוד האימות כבר נוצל'), { status: 403 });
-        }
-        return u;
+    async function sessionUser(req) {
+        const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.session.user_id);
+        if (!user)
+            throw Object.assign(new Error('Authenticated account is unavailable'), { status: 401 });
+        return user;
     }
     app.post('/api/account', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const username = z
             .string()
             .regex(/^[\p{L}\p{N}_.-]{3,64}$/u)
@@ -203,7 +185,7 @@ export async function createApp({ db, config, helper }) {
         res.json({ ok: true, relogin: true });
     });
     app.post('/api/totp/setup', async (req, res) => {
-        const u = await reauth(req);
+        const u = await sessionUser(req);
         if (u.totp) throw new Error('אימות דו־שלבי כבר מופעל');
         const secret = new OTPAuth.Secret({ size: 20 }).base32;
         db.prepare('UPDATE users SET pending_totp=? WHERE id=?').run(
@@ -229,7 +211,7 @@ export async function createApp({ db, config, helper }) {
         res.json({ ok: true });
     });
     app.post('/api/totp/disable', async (req, res) => {
-        const u = await reauth(req);
+        const u = await sessionUser(req);
         db.prepare('UPDATE users SET totp=NULL,pending_totp=NULL,last_totp=-1 WHERE id=?').run(
             u.id
         );
@@ -292,7 +274,7 @@ export async function createApp({ db, config, helper }) {
         });
     app.get('/api/github/status', async (_req, res) => res.json(await helper('github-status')));
     app.post('/api/github/configure', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const input = z
             .object({
                 appId: z.string().regex(/^[1-9][0-9]{0,18}$/),
@@ -318,7 +300,7 @@ export async function createApp({ db, config, helper }) {
         res.json(result);
     });
     app.post('/api/github/disconnect', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const result = await helper('github-disconnect');
         audit(db, req.session.username, 'github-disconnect', 'installation');
         res.json(result);
@@ -410,11 +392,9 @@ export async function createApp({ db, config, helper }) {
                 (dir) => relative === dir || relative.startsWith(dir + '/')
             )
         )
-            return res
-                .status(403)
-                .json({
-                    error: 'תיקיית נתונים מוגנת; ניהול קבצי מקור אינו מאפשר גישה לנתוני היישום',
-                });
+            return res.status(403).json({
+                error: 'תיקיית נתונים מוגנת; ניהול קבצי מקור אינו מאפשר גישה לנתוני היישום',
+            });
         if (
             view.lifecycle !== 'active' &&
             /^\/api\/projects\/[^/]+\/(?:files|file|directory|download|git|preview|clone|deploy|pull|env)\/?$/.test(
@@ -429,11 +409,11 @@ export async function createApp({ db, config, helper }) {
         db,
         helper,
         queue,
-        reauth,
+        sessionUser,
         origin: config.origin,
         origins: () => config.origins || [config.origin],
     });
-    registerNetwork({ app, db, helper, queue, reauth, config });
+    registerNetwork({ app, db, helper, queue, sessionUser, config });
     app.get('/api/projects/:project/qr', async (req, res) =>
         res.json(await helper('project-qr', { project: req.project.id }))
     );
@@ -489,7 +469,7 @@ export async function createApp({ db, config, helper }) {
             res.status(202).json({ job: id });
         });
     app.post('/api/projects/:project/env', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         if (queue.locks.has('project:' + req.project.id))
             return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
         const values = z.record(z.string(), z.string().max(8192)).parse(req.body.values);
@@ -592,7 +572,7 @@ export async function createApp({ db, config, helper }) {
         res.json({ ok: true });
     });
     app.post('/api/backups', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const id = randomUUID();
         const file = path.join(config.data, 'backup-' + id + '.sqlite');
         await backup(db, file);

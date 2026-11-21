@@ -166,19 +166,12 @@ test('authentication, CSRF, TOTP, service allowlist adapter and encrypted backup
     assert.equal(response.status, 202);
     await queue.tail;
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status='failed'").get().n, 1);
-    response = await request('/totp/setup', 'POST', { password: 'a long test password' });
+    response = await request('/totp/setup', 'POST', {});
     const secret = (await response.json()).secret;
     assert.ok(secret);
     response = await request('/totp/enable', 'POST', { code: totp(secret).generate() });
-    assert.equal(response.status, 200);
-    assert.equal(
-        (await request('/backups', 'POST', { password: 'a long test password' })).status,
-        400
-    );
-    // A later TOTP time step is used to avoid intentionally rejected replay.
-    const timestamp = Date.now() + 30000;
-    const code = totp(secret).generate({ timestamp });
-    response = await request('/backups', 'POST', { password: 'a long test password', code });
+    // Ordinary actions use the authenticated session even when login TOTP is enabled.
+    response = await request('/backups', 'POST', {});
     assert.equal(response.status, 200);
     const backup = (await response.json()).id;
     const encrypted = await fs.readFile(path.join(dir, 'backups', backup + '.enc'), 'utf8');

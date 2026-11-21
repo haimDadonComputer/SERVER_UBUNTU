@@ -49,7 +49,7 @@ export function registerLifecycle({
     db,
     helper,
     queue,
-    reauth,
+    sessionUser,
     origin,
     origins = () => [origin],
 }) {
@@ -199,8 +199,13 @@ export function registerLifecycle({
     app.get('/api/projects/:project/env', async (req, res) =>
         res.json(await helper('project-env-meta', { project: req.project.id }))
     );
+    app.post('/api/projects/:project/env/reveal', async (req, res) => {
+        res.set('Cache-Control', 'no-store, private');
+        res.set('Pragma', 'no-cache');
+        res.json(await helper('project-env-values', { project: req.project.id }));
+    });
     app.post('/api/projects/:project/env/import', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         if (queue.locks.has('project:' + req.project.id))
             return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
         const input = z.object({ text: z.string().max(1048576) }).parse(req.body);
@@ -218,7 +223,7 @@ export function registerLifecycle({
         );
     });
     app.patch('/api/projects/:project/env', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         if (queue.locks.has('project:' + req.project.id))
             return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
         const input = z
@@ -257,7 +262,7 @@ export function registerLifecycle({
         enqueue(req, res, 'project-archive', input);
     });
     app.delete('/api/projects/:project', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const input = z
             .object({ confirmed: z.literal(true), confirmName: z.string() })
             .parse(req.body);

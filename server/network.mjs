@@ -5,14 +5,14 @@ export function applyNetworkOrigins(config, state) {
     config.origins = [config.origin, ...(config.extraOrigins || [])];
     if (state.management && state.domain) config.origins.push('https://' + state.domain);
 }
-export function registerNetwork({ app, db, helper, queue, reauth, config }) {
+export function registerNetwork({ app, db, helper, queue, sessionUser, config }) {
     const save = (state) => {
         applyNetworkOrigins(config, state);
         return state;
     };
     app.get('/api/network', async (_req, res) => res.json(save(await helper('network-status'))));
     app.patch('/api/network', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const input = z
             .object({
                 ip: z.string().max(45),
@@ -46,8 +46,18 @@ export function registerNetwork({ app, db, helper, queue, reauth, config }) {
         domain: z.string().trim().toLowerCase().max(253).default(''),
     });
     app.post('/api/projects/:project/publication', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const input = publish.parse(req.body);
+        if (input.domain && !input.domain.includes('.')) {
+            const network = await helper('network-status');
+            const suffix = network.projectDomainSuffix || 'haimdadon.co.il';
+            if (
+                !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(input.domain) ||
+                !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(suffix)
+            )
+                throw new Error('Invalid project subdomain');
+            input.domain += '.' + suffix;
+        }
         if (
             input.domain &&
             config.origins.some((origin) => {
@@ -65,11 +75,11 @@ export function registerNetwork({ app, db, helper, queue, reauth, config }) {
         );
     });
     app.post('/api/network/management', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         enqueue(req, res, 'network-management', publish.parse(req.body), 'network:management');
     });
     app.post('/api/network/certificates/test', async (req, res) => {
-        await reauth(req);
+        await sessionUser(req);
         const input = z
             .object({ kind: z.enum(['ip', 'management']), confirmed: z.literal(true) })
             .parse(req.body);

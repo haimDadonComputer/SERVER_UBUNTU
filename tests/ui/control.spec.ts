@@ -101,6 +101,25 @@ test.beforeAll(async () => {
                     dockerfile: false,
                     lockfiles: [],
                 };
+            if (
+                action === 'inventory' &&
+                [...rootRecords.values()].some((record) => record.runtime)
+            )
+                return {
+                    ports: [],
+                    services: [...rootRecords.values()]
+                        .filter((record) => record.runtime)
+                        .map((record) => ({
+                            id: record.service,
+                            status: record.desired === 'running' ? 'active' : 'inactive',
+                        })),
+                };
+            if (action === 'project-env-values')
+                return {
+                    keys: Object.keys(environments.get(args.project) || {}),
+                    publicBuild: [],
+                    values: environments.get(args.project) || {},
+                };
             if (action === 'project-env-meta')
                 return {
                     keys: Object.keys(environments.get(args.project) || {}),
@@ -394,13 +413,20 @@ test('compact project cards expose primary actions, safe links, truthful publica
         kind: 'node',
         lifecycle: 'active',
         service: id === 'unconfigured' ? null : 'uc:' + id,
-        runtime: id === 'unconfigured' ? null : runtime,
+        runtime:
+            id === 'unconfigured'
+                ? null
+                : id === 'running'
+                  ? { ...runtime, listenAddress: '127.0.0.1' }
+                  : runtime,
+        ownership: 'managed',
         repo: 'https://github.com/example/' + 'long-repository-name'.repeat(8),
     }));
     const archived = { ...projects[0], id: 'archived', name: 'archived', lifecycle: 'archived' };
     let known = true,
         accessFailure = false;
     let publicationAttempted = false;
+    let publicationRequest: Record<string, any> = {};
     const publicationDiagnostic = {
         code: 'NGINX_BIND_PERMISSION',
         stage: 'proxy-validation',
@@ -464,6 +490,7 @@ test('compact project cards expose primary actions, safe links, truthful publica
     );
     await page.route('**/api/projects/running/publication', (route) => {
         publicationAttempted = true;
+        publicationRequest = route.request().postDataJSON();
         return route.fulfill({ status: 202, json: { job: 'publication-test' } });
     });
     await page.route('**/api/jobs/publication-test/events', (route) =>
@@ -518,6 +545,7 @@ test('compact project cards expose primary actions, safe links, truthful publica
     ).not.toBeVisible();
     await expect(card.getByText('פועל', { exact: true })).toBeVisible();
     await expect(card.getByText('מפורסם באינטרנט', { exact: true })).toBeVisible();
+    await expect(card.locator('.project-server-ip')).toContainText('192.0.2.10');
     await expect(card.getByRole('link', { name: /כניסה לפרויקט/ })).toHaveAttribute(
         'href',
         'https://app.example.test/'
@@ -550,6 +578,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await expect(unconfigured.getByText('לא מוגדר', { exact: true })).toBeVisible();
     await expect(unconfigured.getByText('אין כרגע כתובת גישה', { exact: true })).toBeVisible();
     await expect(unconfigured.getByRole('button', { name: 'עצירה', exact: true })).toBeDisabled();
+    await expect(
+        unconfigured.getByRole('button', { name: 'פרסום באינטרנט', exact: true })
+    ).toBeDisabled();
     const boxes = await cards.evaluateAll((elements) =>
         elements.map((element) => {
             const r = element.getBoundingClientRect();
@@ -562,7 +593,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await expect(card.getByRole('button', { name: 'קונסול הפרויקט', exact: true })).toBeVisible();
     await card.locator('.project-manage > summary').click();
     // A successful newer operation must not resurrect an older failure.
-    projectJobs = projectJobs.filter((job) => job.resource !== 'project:running');
+    projectJobs = projectJobs.filter(
+        (job) => !['project:running', 'project:stopped'].includes(job.resource)
+    );
     projectJobs.unshift({
         id: 'older-failure',
         resource: 'project:running',
@@ -579,15 +612,27 @@ test('compact project cards expose primary actions, safe links, truthful publica
     });
     await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
     await expect(card.locator('.project-job-status')).toHaveCount(0);
+    await expect(stopped.getByRole('button', { name: 'עצירה', exact: true })).toBeDisabled();
+    await expect(stopped.getByRole('button', { name: 'הפעלה מחדש', exact: true })).toBeDisabled();
+    await expect(
+        stopped.getByRole('button', { name: 'פרסום באינטרנט', exact: true })
+    ).toBeDisabled();
+    await expect(card.getByRole('button', { name: 'עצירה', exact: true })).toBeEnabled();
+    await expect(card.getByRole('button', { name: 'הפעלה מחדש', exact: true })).toBeEnabled();
     await card.getByRole('button', { name: 'פרסום באינטרנט', exact: true }).click();
     const publishDialog = page.getByRole('dialog', { name: 'פרסום הפרויקט', exact: true });
-    await publishDialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
+    await expect(publishDialog.getByLabel('סיסמה נוכחית')).toHaveCount(0);
+    await publishDialog.getByLabel('דומיין לפרויקט (אופציונלי)').fill('forms');
+    await expect(publishDialog.getByText(/https:\/\/forms\.haimdadon\.co\.il/)).toBeVisible();
+    await expect(publishDialog.getByLabel('פורט ציבורי')).toHaveValue('443');
     await publishDialog.getByRole('checkbox', { name: /אני מאשר/ }).check();
     await publishDialog.getByRole('button', { name: 'פתיחה לאינטרנט', exact: true }).click();
     await expect(
         publishDialog.getByRole('alert').filter({ hasText: 'Nginx validation failed' })
     ).toBeVisible();
     expect(publicationAttempted).toBe(true);
+    expect(publicationRequest.domain).toBe('forms.haimdadon.co.il');
+    expect(publicationRequest.password).toBeUndefined();
     await expandDetails(publishDialog.locator('.error-details'));
     await expect(publishDialog.getByText('NGINX_BIND_PERMISSION', { exact: true })).toBeVisible();
     await expect(
@@ -687,12 +732,7 @@ test('project runtime, private environment metadata, console and archive restora
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await expandDetails(card.locator('.project-manage'));
     await expect(card.getByLabel('עדכונים עבור מחזור חיים')).toHaveValue('manual');
-    await card.getByRole('button', { name: 'פרסום באינטרנט', exact: true }).click();
-    await dialog.getByLabel('דומיין לפרויקט (אופציונלי)').fill('forms.example.com');
-    await expect(dialog.getByLabel('פורט ציבורי')).toHaveValue('443');
-    await expect(dialog.getByLabel('פורט ציבורי')).toBeDisabled();
-    await expect(dialog.getByRole('checkbox', { name: 'HTTPS עם תעודה ציבורית' })).toBeChecked();
-    await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
+    await expect(card.getByRole('button', { name: 'פרסום באינטרנט', exact: true })).toBeDisabled();
     expect(rootRecords.get('lifecycle-demo')?.runtime.storageDirectories).toEqual([
         'data',
         'public/nested/uploads',
@@ -714,7 +754,7 @@ test('project runtime, private environment metadata, console and archive restora
     await expect(card.locator('.lifecycle-actions .primary')).toBeDisabled();
     releaseRuntime?.();
     runtimeGate = null;
-    await expect(card.getByRole('button', { name: 'הפעלת פרויקט', exact: true })).toBeEnabled({
+    await expect(card.getByRole('button', { name: 'הפעלת פרויקט', exact: true })).toBeDisabled({
         timeout: 10000,
     });
     await expect(card.getByRole('link', { name: 'כניסה לפרויקט' })).toHaveAttribute(
@@ -732,10 +772,12 @@ test('project runtime, private environment metadata, console and archive restora
     await card.getByRole('button', { name: 'משתני סביבה', exact: true }).click();
     await dialog.getByRole('button', { name: 'הוספת משתנה' }).click();
     await dialog.getByLabel('שם משתנה 0').fill('API_KEY');
-    await dialog.getByLabel('ערך חדש API_KEY').fill('browser-test-private-value');
-    await dialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
+    await dialog.getByLabel('ערך API_KEY').fill('browser-test-private-value');
     await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
-    await expect(dialog.getByLabel('ערך חדש API_KEY')).toHaveValue('');
+    await expect(dialog.getByLabel('ערך API_KEY')).toHaveValue('browser-test-private-value');
+    await expect(dialog.getByLabel('ערך API_KEY')).toHaveAttribute('type', 'text');
+    await expect(dialog.getByLabel('ערך API_KEY')).toHaveAttribute('autocomplete', 'off');
+    await expect(dialog.getByLabel('סיסמה נוכחית')).toHaveCount(0);
     await expect(dialog.getByText('browser-test-private-value')).toHaveCount(0);
     await dialog.getByLabel('העלאת קובץ ENV (מיזוג)').setInputFiles({
         name: '.env',
@@ -744,9 +786,8 @@ test('project runtime, private environment metadata, console and archive restora
     });
     await expect(dialog.getByText(/API_KEY \(החלפה\)/)).toBeVisible();
     await expect(dialog.getByText('uploaded-private-value')).toHaveCount(0);
-    await dialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
     await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
-    await expect(dialog.getByLabel('ערך חדש EMPTY')).toHaveValue('');
+    await expect(dialog.getByLabel('ערך EMPTY')).toHaveValue('');
     expect(environments.get('lifecycle-demo')?.API_KEY).toBe('uploaded-private-value');
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await expandDetails(card.locator('.project-manage'));

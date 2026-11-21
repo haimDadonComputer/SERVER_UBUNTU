@@ -8,7 +8,7 @@ import argon2 from 'argon2';
 import { createApp } from '../server/app.mjs';
 import { openDatabase } from '../server/db.mjs';
 
-test('lifecycle API preserves authentication, CSRF, secret reauthentication and serialized mutations', async (t) => {
+test('lifecycle API preserves authentication, CSRF, session-only actions and protected value reveal and serialized mutations', async (t) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'uc-lifecycle-api-')),
         db = openDatabase(dir),
         password = 'test-only-long-password';
@@ -35,6 +35,12 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
                 listenAddress: args.listenAddress,
                 status: 'available',
                 listeners: [],
+            };
+        if (action === 'project-env-values')
+            return {
+                keys: ['API_KEY'],
+                publicBuild: [],
+                values: { API_KEY: 'visible-only-in-reveal' },
             };
         if (action === 'project-env-meta')
             return { keys: ['API_KEY'], publicBuild: [], restartRequired: false };
@@ -99,10 +105,32 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
         });
     assert.equal((await request('/projects/demo/env')).status, 401);
     assert.equal((await request('/project-access')).status, 401);
+    assert.equal((await request('/projects/demo/env/reveal', 'POST', {})).status, 401);
     assert.equal((await request('/projects/demo/port-check?port=3000')).status, 401);
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
+    assert.equal(
+        (await request('/projects/demo/env/reveal', 'POST', {}, { 'X-CSRF-Token': 'bad' })).status,
+        403
+    );
+    assert.equal(
+        (
+            await request(
+                '/projects/demo/env/reveal',
+                'POST',
+                {},
+                { Origin: 'https://other.example' }
+            )
+        ).status,
+        403
+    );
+    const reveal = await request('/projects/demo/env/reveal', 'POST', {});
+    assert.match(reveal.headers.get('cache-control'), /no-store/);
+    assert.deepEqual((await reveal.json()).values, { API_KEY: 'visible-only-in-reveal' });
+    assert.ok(
+        !(await (await request('/projects/demo/env')).text()).includes('visible-only-in-reveal')
+    );
     const access = await (await request('/project-access')).json();
     assert.equal(access.publicationStatusKnown, true);
     assert.ok(access.managementHosts.includes('lifecycle-test'));
@@ -129,7 +157,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
                 password: 'wrong',
             })
         ).status,
-        403
+        200
     );
     response = await request('/projects/demo/env/import', 'POST', {
         text: 'API_KEY=private-value',
@@ -146,7 +174,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
                 password: 'wrong',
             })
         ).status,
-        403
+        200
     );
     response = await request('/network/management', 'POST', {
         enabled: true,
@@ -187,6 +215,20 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
         )
     );
     assert.ok(!config.origins.includes('https://forms.example.com'));
+    response = await request('/projects/demo/publication', 'POST', {
+        enabled: true,
+        confirmed: true,
+        domain: 'forms',
+        https: true,
+    });
+    assert.equal(response.status, 202);
+    await queue.tail;
+    assert.ok(
+        calls.some(
+            ([action, args]) =>
+                action === 'network-project' && args.domain === 'forms.haimdadon.co.il'
+        )
+    );
     assert.equal(
         (
             await request(
@@ -249,7 +291,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
                 set: { API_KEY: 'sensitive-value' },
             })
         ).status,
-        403
+        200
     );
     response = await request('/projects/demo/env');
     assert.deepEqual((await response.json()).keys, ['API_KEY']);
@@ -320,10 +362,10 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
             await request('/projects/demo', 'DELETE', {
                 confirmed: true,
                 confirmName: 'demo',
-                password: 'wrong',
+                confirmName: 'incorrect-name',
             })
         ).status,
-        403
+        400
     );
     response = await request('/projects/demo/archive', 'POST', {
         confirmed: true,

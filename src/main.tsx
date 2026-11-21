@@ -322,6 +322,18 @@ function App() {
         }
         connect();
         const interval = setInterval(() => {
+            if (!document.hidden && ws.current?.readyState !== WebSocket.OPEN) {
+                api('/inventory')
+                    .then(setInv)
+                    .catch((error) =>
+                        setInv({
+                            ports: [],
+                            services: [],
+                            error: error.message,
+                            details: error.details,
+                        })
+                    );
+            }
             api('/jobs')
                 .then(setJobs)
                 .catch(() => {});
@@ -544,9 +556,7 @@ function App() {
                 title="עדכון פרטי התחברות"
                 fields={[
                     { key: 'username', label: 'שם משתמש חדש', placeholder: user?.username },
-                    { key: 'password', label: 'סיסמה נוכחית', type: 'password' },
                     { key: 'newPassword', label: 'סיסמה חדשה (14 תווים לפחות)', type: 'password' },
-                    ...(user?.totpEnabled ? [{ key: 'code', label: 'קוד אימות' }] : []),
                 ]}
                 onClose={() => setModal(null)}
                 submit={async (v: Any) => {
@@ -558,14 +568,11 @@ function App() {
             />
         );
     }
-    function passwordModal(action: string, title: string) {
+    function actionModal(action: string, title: string) {
         setModal(
             <Form
                 title={title}
-                fields={[
-                    { key: 'password', label: 'סיסמה נוכחית', type: 'password' },
-                    ...(user?.totpEnabled ? [{ key: 'code', label: 'קוד אימות דו־שלבי' }] : []),
-                ]}
+                fields={[]}
                 onClose={() => setModal(null)}
                 submit={async (v: Any) => {
                     const data = await api(action, 'POST', v);
@@ -1467,6 +1474,7 @@ function App() {
                                         )}
                                         <ProjectActions
                                             project={p}
+                                            serviceState={projectStatus(p)}
                                             api={api}
                                             refresh={refresh}
                                             onQueued={() =>
@@ -1883,6 +1891,9 @@ function App() {
                                 project={
                                     projects.find((p) => p.id === fileProject.id) || fileProject
                                 }
+                                serviceState={projectStatus(
+                                    projects.find((p) => p.id === fileProject.id) || fileProject
+                                )}
                                 api={api}
                                 refresh={refresh}
                                 onQueued={() =>
@@ -2252,7 +2263,7 @@ function App() {
                                         <button
                                             className="secondary"
                                             onClick={() =>
-                                                passwordModal(
+                                                actionModal(
                                                     user.totpEnabled
                                                         ? '/totp/disable'
                                                         : '/totp/setup',
@@ -2410,9 +2421,7 @@ function App() {
                                     </p>
                                     <button
                                         className="secondary"
-                                        onClick={() =>
-                                            passwordModal('/backups', 'יצירת גיבוי מוצפן')
-                                        }
+                                        onClick={() => actionModal('/backups', 'יצירת גיבוי מוצפן')}
                                     >
                                         <Plus size={15} />
                                         יצירת גיבוי
@@ -2745,7 +2754,7 @@ function Form({ title, description, fields, onClose, submit, children }: Any) {
                                 placeholder={f.placeholder}
                                 type={f.type || 'text'}
                                 required={f.type !== 'checkbox' && f.required !== false}
-                                autoComplete={f.type === 'password' ? 'current-password' : 'off'}
+                                autoComplete={f.type === 'password' ? 'new-password' : 'off'}
                                 dir={f.type === 'checkbox' ? undefined : 'auto'}
                             />
                         )}

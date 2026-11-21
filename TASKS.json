@@ -1,5 +1,5 @@
 {
-    "updated": "2026-11-15",
+    "updated": "2026-11-22",
     "phases": [
         {
             "id": "architecture",
@@ -92,6 +92,12 @@
                 "productionBuild": "passed",
                 "ubuntuAcceptance": "pending; operator scripts and checklist in INSTALL.md"
             }
+        },
+        {
+            "id": "node-startup-build-preparation",
+            "status": "implemented",
+            "description": "Move literal npm build prefixes in selected start/prestart scripts into release preparation; change only the release package.json and retain read-only runtime source",
+            "verification": "26 Node tests passed; Python ran 138 tests with 123 passed and 15 platform skips; production build passed. Real npm regression confirms startup does not repeat the build. Ubuntu DynamicUser/systemd integration remains unverified; existing releases require explicit rebuild/redeploy."
         },
         {
             "id": "ubuntu-live-validation",

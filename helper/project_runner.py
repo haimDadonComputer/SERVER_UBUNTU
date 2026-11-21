@@ -99,6 +99,33 @@ def options(root):
         if len(entries)>=800:break
     return {'scripts':sorted(k for k in package.get('scripts',{}) if re.fullmatch(r'[A-Za-z0-9:_-]{1,80}',k)),'entries':sorted(entries),'dockerfile':(root/'Dockerfile').is_file() and not (root/'Dockerfile').is_symlink(),'git':(root/'.git').exists(),'lockfiles':[name for name in ('package-lock.json','npm-shrinkwrap.json','pnpm-lock.yaml','yarn.lock','bun.lock','bun.lockb') if (root/name).is_file() and not (root/name).is_symlink()]}
 
+def startup_builds(package):
+    """Move only literal npm build prefixes out of the selected launch script.
+
+    Never parse/evaluate shell text. The remaining package script is preserved
+    verbatim and still runs through npm as the unprivileged runtime identity.
+    """
+    if BUILD_CONFIG.get('kind')!='node' or BUILD_CONFIG.get('mode')!='npm':return [],{}
+    selected=BUILD_CONFIG.get('script','start');scripts=package.get('scripts',{})
+    builds=[];updates={}
+    for name in ('pre'+selected,selected):
+        original=scripts.get(name)
+        if not isinstance(original,str):continue
+        remaining=original
+        while True:
+            match=re.fullmatch(r'\s*npm\s+run\s+([A-Za-z0-9:_-]{1,80})\s*(?:&&\s*(.+))?',remaining,flags=re.DOTALL)
+            if not match:break
+            build,tail=match.groups()
+            if build==selected or build not in scripts or not (re.fullmatch(r'build(?::[A-Za-z0-9:_-]+)?',build) or build==BUILD_CONFIG.get('buildScript')):break
+            # A launch script must keep its server command. A pure pre hook may
+            # disappear once its build has completed in the release builder.
+            if tail is None and name==selected:break
+            if build not in builds:builds.append(build)
+            remaining=tail or ''
+            if not remaining:break
+        if remaining!=original:updates[name]=remaining
+    return builds,updates
+
 def build_target(root,target):
     kind=BUILD_CONFIG.get('kind')
     if kind=='docker' and BUILD_CONFIG.get('skipDocker'):return
@@ -110,10 +137,21 @@ def build_target(root,target):
             raise OperationError('חסר קובץ נעילת תלויות של npm',{'code':'NPM_LOCKFILE_MISSING','stage':'dependency-install','cwd':str(target),'stderr':'Node projects require package-lock.json or npm-shrinkwrap.json for npm ci','hint':'הוסיפו package-lock.json למאגר, או בחרו במפורש בהגדרות ההפעלה npm install כאשר אין קובץ נעילה. אם הפרויקט משתמש ב־pnpm/yarn/bun, השתמשו ב־Dockerfile מתאים במקום להחליף מנהל חבילות אוטומטית.'})
         command(target,['/usr/bin/env','npm','install' if policy=='install' or not locked else 'ci'],300)
         package=json.loads((target/'package.json').read_text())
+        startup,updates=startup_builds(package)
         scripts=([BUILD_CONFIG.get('testScript'),BUILD_CONFIG.get('buildScript')] if BUILD_CONFIG else ['test','build'])
+        scripts += [script for script in startup if script not in scripts]
         for script in scripts:
             if script and BUILD_CONFIG and script not in package.get('scripts',{}):raise ValueError('Configured build/test script is missing in the new release')
             if script and script in package.get('scripts',{}):command(target,['/usr/bin/env','npm','run',script],300)
+        if updates:
+            # Modify only the disposable release, after every build succeeds.
+            # Source checkout, lockfiles and runtime write permissions stay intact.
+            manifest=target/'package.json'
+            if target.resolve()==root.resolve() or manifest.is_symlink() or manifest.stat().st_nlink!=1:raise ValueError('Startup preparation requires a private release package.json')
+            for name,value in updates.items():
+                if value:package['scripts'][name]=value
+                else:package['scripts'].pop(name,None)
+            manifest.write_text(json.dumps(package,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     elif not (target/'Dockerfile').exists() and not (BUILD_CONFIG.get('mode')=='entry'):raise ValueError('Expected Node package.json or Dockerfile')
     if (target/'Dockerfile').exists() and (kind=='docker' or not BUILD_CONFIG):
         image='ubuntu-project-'+root.name+':'+target.name

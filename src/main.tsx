@@ -115,6 +115,8 @@ function App() {
         [jobPanel, setJobPanel] = useState(false),
         [selectedJob, setSelectedJob] = useState(''),
         [publications, setPublications] = useState<Any>({}),
+        [managementHosts, setManagementHosts] = useState<string[] | null>(null),
+        [publicationStatusKnown, setPublicationStatusKnown] = useState(false),
         [connected, setConnected] = useState(false),
         [modal, setModal] = useState<React.ReactNode>(null),
         [query, setQuery] = useState(''),
@@ -254,7 +256,18 @@ function App() {
         if (results[4].status === 'fulfilled') setSettings(results[4].value);
         if (results[5].status === 'fulfilled') setArchivedProjects(results[5].value);
         if (results[6].status === 'fulfilled') setServerAddresses(results[6].value.addresses || []);
-        if (results[6].status === 'fulfilled') setPublications(results[6].value.publications || {});
+        if (results[6].status === 'fulfilled') {
+            setPublications(results[6].value.publications || {});
+            setManagementHosts(
+                Array.isArray(results[6].value.managementHosts)
+                    ? results[6].value.managementHosts
+                    : null
+            );
+            setPublicationStatusKnown(results[6].value.publicationStatusKnown === true);
+        } else {
+            setPublicationStatusKnown(false);
+            setManagementHosts(null);
+        }
     }
     useEffect(() => {
         if (!user) return;
@@ -322,8 +335,15 @@ function App() {
                 .then((data) => {
                     setServerAddresses(data.addresses || []);
                     setPublications(data.publications || {});
+                    setManagementHosts(
+                        Array.isArray(data.managementHosts) ? data.managementHosts : null
+                    );
+                    setPublicationStatusKnown(data.publicationStatusKnown === true);
                 })
-                .catch(() => {});
+                .catch(() => {
+                    setPublicationStatusKnown(false);
+                    setManagementHosts(null);
+                });
         }, 5000);
         return () => {
             stopped = true;
@@ -588,7 +608,9 @@ function App() {
     const projectStatus = (p: Any) =>
         p.lifecycle === 'archived'
             ? 'archived'
-            : inv.services?.find((s: Any) => s.id === p.service)?.status || 'unknown';
+            : !p.runtime && !p.service
+              ? 'unconfigured'
+              : inv.services?.find((s: Any) => s.id === p.service)?.status || 'unknown';
     const visibleProjects = (showArchived ? archivedProjects : projects).filter((p) => {
         const match = [p.name, p.id, p.repo].some((value) =>
             String(value || '')
@@ -1378,12 +1400,31 @@ function App() {
                                                 label={
                                                     p.lifecycle === 'archived'
                                                         ? 'בארכיון'
-                                                        : undefined
+                                                        : projectStatus(p) === 'unconfigured'
+                                                          ? 'לא מוגדר'
+                                                          : projectStatus(p) === 'active'
+                                                            ? 'פועל'
+                                                            : projectStatus(p) === 'failed'
+                                                              ? 'נכשל'
+                                                              : ['inactive', 'stopped'].includes(
+                                                                      projectStatus(p)
+                                                                  )
+                                                                ? 'כבוי'
+                                                                : undefined
                                                 }
                                             />
                                         </div>
                                         {jobs
-                                            .filter((j) => j.resource === 'project:' + p.id)
+                                            .filter(
+                                                (j) =>
+                                                    j.resource === 'project:' + p.id &&
+                                                    [
+                                                        'queued',
+                                                        'running',
+                                                        'failed',
+                                                        'interrupted',
+                                                    ].includes(j.status)
+                                            )
                                             .slice(0, 1)
                                             .map((j) => (
                                                 <button
@@ -1399,26 +1440,25 @@ function App() {
                                                     {stageLabel(j.stage)}
                                                 </button>
                                             ))}
-                                        <p className="mono muted project-path" title={p.root}>
+                                        <p
+                                            className="mono muted project-path"
+                                            dir="ltr"
+                                            title={p.root}
+                                        >
                                             {p.root}
                                         </p>
-                                        <div className="project-meta">
-                                            <span>
-                                                <GitBranch size={14} />
-                                                {p.branch}
-                                            </span>
-                                            <span>{p.kind.toUpperCase()}</span>
-                                            <span>פורט {p.health_port || '—'}</span>
-                                        </div>
-                                        {p.repo && (
+                                        {p.repo ? (
                                             <a
                                                 href={githubUrl(p.repo)}
                                                 target="_blank"
                                                 rel="noreferrer"
                                                 className="repo-link mono"
+                                                dir="ltr"
                                             >
                                                 {p.repo} ↗
                                             </a>
+                                        ) : (
+                                            <small className="muted">אין מאגר GitHub</small>
                                         )}
                                         <ProjectActions
                                             project={p}
@@ -1430,288 +1470,291 @@ function App() {
                                                 )
                                             }
                                             serverAddresses={serverAddresses}
+                                            managementHosts={managementHosts}
+                                            publicationStatusKnown={publicationStatusKnown}
                                             publication={publications[p.id]}
                                             jobs={jobs}
                                             console={openProjectConsole}
                                             totpEnabled={!!user.totpEnabled}
-                                        />
-                                        {p.lifecycle !== 'archived' && (
-                                            <>
-                                                <div className="project-controls">
+                                            onFiles={() => {
+                                                setFileProject(p);
+                                                setFilePath('');
+                                                setEditing('');
+                                                setPage('files');
+                                            }}
+                                            onEnvironment={() => envModal(p)}
+                                        >
+                                            {p.lifecycle !== 'archived' && (
+                                                <>
+                                                    <div className="project-meta">
+                                                        <span>
+                                                            <GitBranch size={14} />
+                                                            {p.branch}
+                                                        </span>
+                                                        <span>{p.kind.toUpperCase()}</span>
+                                                        <span>פורט {p.health_port || '—'}</span>
+                                                    </div>
                                                     {p.service &&
                                                         !p.runtime &&
                                                         btnService(p.service)}
-                                                    <button
-                                                        className="secondary"
-                                                        onClick={() => {
-                                                            setFileProject(p);
-                                                            setFilePath('');
-                                                            setEditing('');
-                                                            setPage('files');
-                                                        }}
-                                                    >
-                                                        <Folder size={14} />
-                                                        קבצים
-                                                    </button>
-                                                    <button
-                                                        className="text-btn"
-                                                        onClick={() => envModal(p)}
-                                                    >
-                                                        משתני סביבה
-                                                    </button>
-                                                </div>
-                                                <details className="project-source-details">
-                                                    <summary>מאגר, סנכרון וגרסאות</summary>
-                                                    <div className="project-controls">
-                                                        {!p.runtime && (
-                                                            <button
-                                                                className="secondary"
-                                                                disabled={
-                                                                    pending ||
-                                                                    !!p.runtime ||
-                                                                    !p.service ||
-                                                                    !p.health_port
-                                                                }
-                                                                title={
-                                                                    !p.service
-                                                                        ? 'נדרש שיוך שירות לצורך פריסה; ניהול הקבצים זמין כבר עכשיו'
-                                                                        : undefined
-                                                                }
-                                                                onClick={() => deploy(p)}
-                                                            >
-                                                                <RefreshCw size={14} />
-                                                                סנכרון GitHub
-                                                            </button>
-                                                        )}
+                                                    <details className="project-source-details">
+                                                        <summary>מאגר, סנכרון וגרסאות</summary>
+                                                        <div className="project-controls">
+                                                            {!p.runtime && (
+                                                                <button
+                                                                    className="secondary"
+                                                                    disabled={
+                                                                        pending ||
+                                                                        !!p.runtime ||
+                                                                        !p.service ||
+                                                                        !p.health_port
+                                                                    }
+                                                                    title={
+                                                                        !p.service
+                                                                            ? 'נדרש שיוך שירות לצורך פריסה; ניהול הקבצים זמין כבר עכשיו'
+                                                                            : undefined
+                                                                    }
+                                                                    onClick={() => deploy(p)}
+                                                                >
+                                                                    <RefreshCw size={14} />
+                                                                    סנכרון GitHub
+                                                                </button>
+                                                            )}
 
-                                                        <button
-                                                            className="text-btn"
-                                                            disabled={!p.repo}
-                                                            onClick={() =>
-                                                                setModal(
-                                                                    <Confirm
-                                                                        title="התקנת מאגר"
-                                                                        text="ישוכפל המאגר שנבחר בפרויקט לתיקייה ריקה בלבד. לשימוש במאגר פרטי יש להגדיר Deploy Key אצל משתמש הפרויקטים."
-                                                                        onClose={() =>
-                                                                            setModal(null)
-                                                                        }
-                                                                        onConfirm={() => {
-                                                                            setModal(null);
-                                                                            void run(() =>
-                                                                                api(
-                                                                                    `/projects/${p.id}/clone`,
-                                                                                    'POST',
-                                                                                    {
-                                                                                        confirmed: true,
-                                                                                    }
-                                                                                )
-                                                                            );
-                                                                        }}
-                                                                    />
-                                                                )
-                                                            }
-                                                        >
-                                                            התקנה ממאגר
-                                                        </button>
-                                                    </div>
-                                                    <div className="project-controls">
-                                                        <button
-                                                            className="text-btn"
-                                                            disabled={pending || !p.repo}
-                                                            onClick={() =>
-                                                                setModal(
-                                                                    <Confirm
-                                                                        title="משיכת קוד בלבד"
-                                                                        text="הקוד המקומי יעודכן רק אם ניתן לבצע fast-forward וללא שינויים מקומיים. תישמר הפניה לגרסה הקודמת. השירות הפעיל, הבנייה והנתונים לא ישתנו."
-                                                                        onClose={() =>
-                                                                            setModal(null)
-                                                                        }
-                                                                        onConfirm={() => {
-                                                                            setModal(null);
-                                                                            void run(() =>
-                                                                                api(
-                                                                                    `/projects/${p.id}/pull`,
-                                                                                    'POST',
-                                                                                    {
-                                                                                        confirmed: true,
-                                                                                    }
-                                                                                )
-                                                                            );
-                                                                        }}
-                                                                    />
-                                                                )
-                                                            }
-                                                        >
-                                                            משיכת קוד בלבד
-                                                        </button>
-                                                        <button
-                                                            className="text-btn"
-                                                            onClick={() =>
-                                                                void run(async () => {
-                                                                    const s = await api(
-                                                                        `/projects/${p.id}/git`
-                                                                    );
+                                                            <button
+                                                                className="text-btn"
+                                                                disabled={!p.repo}
+                                                                onClick={() =>
                                                                     setModal(
-                                                                        <Info
-                                                                            title="מצב Git"
+                                                                        <Confirm
+                                                                            title="התקנת מאגר"
+                                                                            text="ישוכפל המאגר שנבחר בפרויקט לתיקייה ריקה בלבד. לשימוש במאגר פרטי יש להגדיר Deploy Key אצל משתמש הפרויקטים."
                                                                             onClose={() =>
                                                                                 setModal(null)
                                                                             }
-                                                                        >
-                                                                            <pre className="code">
-                                                                                {JSON.stringify(
-                                                                                    s,
-                                                                                    null,
-                                                                                    2
-                                                                                )}
-                                                                            </pre>
-                                                                            <p>
-                                                                                מצב העדכונים
-                                                                                המרוחקים נבדק בעת
-                                                                                סקירת סנכרון.
-                                                                            </p>
-                                                                        </Info>
-                                                                    );
-                                                                }, '')
-                                                            }
-                                                        >
-                                                            מצב Git
-                                                        </button>
-                                                        {p.service && !p.runtime && (
-                                                            <>
-                                                                <button
-                                                                    className="text-btn"
-                                                                    onClick={() =>
-                                                                        serviceAction(
-                                                                            p.service,
-                                                                            'enable'
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    הפעלה באתחול
-                                                                </button>
-                                                                <button
-                                                                    className="text-btn"
-                                                                    onClick={() =>
-                                                                        serviceAction(
-                                                                            p.service,
-                                                                            'disable'
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    ביטול באתחול
-                                                                </button>
-                                                            </>
-                                                        )}
-                                                    </div>
-                                                    <div className="project-controls">
-                                                        <button
-                                                            className="text-btn"
-                                                            onClick={() =>
-                                                                setModal(
-                                                                    <Info
-                                                                        title="QR לחיבור WhatsApp"
-                                                                        onClose={() =>
-                                                                            setModal(null)
+                                                                            onConfirm={() => {
+                                                                                setModal(null);
+                                                                                void run(() =>
+                                                                                    api(
+                                                                                        `/projects/${p.id}/clone`,
+                                                                                        'POST',
+                                                                                        {
+                                                                                            confirmed: true,
+                                                                                        }
+                                                                                    )
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                    )
+                                                                }
+                                                            >
+                                                                התקנה ממאגר
+                                                            </button>
+                                                        </div>
+                                                        <div className="project-controls">
+                                                            <button
+                                                                className="text-btn"
+                                                                disabled={pending || !p.repo}
+                                                                onClick={() =>
+                                                                    setModal(
+                                                                        <Confirm
+                                                                            title="משיכת קוד בלבד"
+                                                                            text="הקוד המקומי יעודכן רק אם ניתן לבצע fast-forward וללא שינויים מקומיים. תישמר הפניה לגרסה הקודמת. השירות הפעיל, הבנייה והנתונים לא ישתנו."
+                                                                            onClose={() =>
+                                                                                setModal(null)
+                                                                            }
+                                                                            onConfirm={() => {
+                                                                                setModal(null);
+                                                                                void run(() =>
+                                                                                    api(
+                                                                                        `/projects/${p.id}/pull`,
+                                                                                        'POST',
+                                                                                        {
+                                                                                            confirmed: true,
+                                                                                        }
+                                                                                    )
+                                                                                );
+                                                                            }}
+                                                                        />
+                                                                    )
+                                                                }
+                                                            >
+                                                                משיכת קוד בלבד
+                                                            </button>
+                                                            <button
+                                                                className="text-btn"
+                                                                onClick={() =>
+                                                                    void run(async () => {
+                                                                        const s = await api(
+                                                                            `/projects/${p.id}/git`
+                                                                        );
+                                                                        setModal(
+                                                                            <Info
+                                                                                title="מצב Git"
+                                                                                onClose={() =>
+                                                                                    setModal(null)
+                                                                                }
+                                                                            >
+                                                                                <pre className="code">
+                                                                                    {JSON.stringify(
+                                                                                        s,
+                                                                                        null,
+                                                                                        2
+                                                                                    )}
+                                                                                </pre>
+                                                                                <p>
+                                                                                    מצב העדכונים
+                                                                                    המרוחקים נבדק
+                                                                                    בעת סקירת
+                                                                                    סנכרון.
+                                                                                </p>
+                                                                            </Info>
+                                                                        );
+                                                                    }, '')
+                                                                }
+                                                            >
+                                                                מצב Git
+                                                            </button>
+                                                            {p.service && !p.runtime && (
+                                                                <>
+                                                                    <button
+                                                                        className="text-btn"
+                                                                        onClick={() =>
+                                                                            serviceAction(
+                                                                                p.service,
+                                                                                'enable'
+                                                                            )
                                                                         }
                                                                     >
-                                                                        <QrView project={p.id} />
-                                                                    </Info>
-                                                                )
-                                                            }
-                                                        >
-                                                            QR לחיבור WhatsApp
-                                                        </button>
-                                                        <button
-                                                            className="text-btn"
-                                                            onClick={() =>
-                                                                void run(async () => {
-                                                                    const releases = await api(
-                                                                        `/projects/${p.id}/releases`
-                                                                    );
+                                                                        הפעלה באתחול
+                                                                    </button>
+                                                                    <button
+                                                                        className="text-btn"
+                                                                        onClick={() =>
+                                                                            serviceAction(
+                                                                                p.service,
+                                                                                'disable'
+                                                                            )
+                                                                        }
+                                                                    >
+                                                                        ביטול באתחול
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                        <div className="project-controls">
+                                                            <button
+                                                                className="text-btn"
+                                                                onClick={() =>
                                                                     setModal(
                                                                         <Info
-                                                                            title="גרסאות ושחזור"
+                                                                            title="QR לחיבור WhatsApp"
                                                                             onClose={() =>
                                                                                 setModal(null)
                                                                             }
                                                                         >
-                                                                            {releases.length ? (
-                                                                                releases.map(
-                                                                                    (r: Any) => (
-                                                                                        <div
-                                                                                            className="setting-row"
-                                                                                            key={
-                                                                                                r.release
-                                                                                            }
-                                                                                        >
-                                                                                            <span className="mono">
-                                                                                                {
+                                                                            <QrView
+                                                                                project={p.id}
+                                                                            />
+                                                                        </Info>
+                                                                    )
+                                                                }
+                                                            >
+                                                                QR לחיבור WhatsApp
+                                                            </button>
+                                                            <button
+                                                                className="text-btn"
+                                                                onClick={() =>
+                                                                    void run(async () => {
+                                                                        const releases = await api(
+                                                                            `/projects/${p.id}/releases`
+                                                                        );
+                                                                        setModal(
+                                                                            <Info
+                                                                                title="גרסאות ושחזור"
+                                                                                onClose={() =>
+                                                                                    setModal(null)
+                                                                                }
+                                                                            >
+                                                                                {releases.length ? (
+                                                                                    releases.map(
+                                                                                        (
+                                                                                            r: Any
+                                                                                        ) => (
+                                                                                            <div
+                                                                                                className="setting-row"
+                                                                                                key={
                                                                                                     r.release
                                                                                                 }
-                                                                                            </span>
-                                                                                            <button
-                                                                                                className="secondary"
-                                                                                                disabled={
-                                                                                                    !r.rollbackAvailable
-                                                                                                }
-                                                                                                onClick={() =>
-                                                                                                    setModal(
-                                                                                                        <Confirm
-                                                                                                            title="שחזור גרסה"
-                                                                                                            text="השירות יופעל מחדש עם הגרסה שקדמה לגרסה שנבחרה. מסד הנתונים של הפרויקט אינו משוחזר אוטומטית."
-                                                                                                            onClose={() =>
-                                                                                                                setModal(
-                                                                                                                    null
-                                                                                                                )
-                                                                                                            }
-                                                                                                            onConfirm={() => {
-                                                                                                                setModal(
-                                                                                                                    null
-                                                                                                                );
-                                                                                                                void run(
-                                                                                                                    () =>
-                                                                                                                        api(
-                                                                                                                            `/projects/${p.id}/rollback`,
-                                                                                                                            'POST',
-                                                                                                                            {
-                                                                                                                                release:
-                                                                                                                                    r.release,
-                                                                                                                                confirmed: true,
-                                                                                                                            }
-                                                                                                                        )
-                                                                                                                );
-                                                                                                            }}
-                                                                                                        />
-                                                                                                    )
-                                                                                                }
                                                                                             >
-                                                                                                שחזור
-                                                                                                לקודמת
-                                                                                            </button>
-                                                                                        </div>
+                                                                                                <span className="mono">
+                                                                                                    {
+                                                                                                        r.release
+                                                                                                    }
+                                                                                                </span>
+                                                                                                <button
+                                                                                                    className="secondary"
+                                                                                                    disabled={
+                                                                                                        !r.rollbackAvailable
+                                                                                                    }
+                                                                                                    onClick={() =>
+                                                                                                        setModal(
+                                                                                                            <Confirm
+                                                                                                                title="שחזור גרסה"
+                                                                                                                text="השירות יופעל מחדש עם הגרסה שקדמה לגרסה שנבחרה. מסד הנתונים של הפרויקט אינו משוחזר אוטומטית."
+                                                                                                                onClose={() =>
+                                                                                                                    setModal(
+                                                                                                                        null
+                                                                                                                    )
+                                                                                                                }
+                                                                                                                onConfirm={() => {
+                                                                                                                    setModal(
+                                                                                                                        null
+                                                                                                                    );
+                                                                                                                    void run(
+                                                                                                                        () =>
+                                                                                                                            api(
+                                                                                                                                `/projects/${p.id}/rollback`,
+                                                                                                                                'POST',
+                                                                                                                                {
+                                                                                                                                    release:
+                                                                                                                                        r.release,
+                                                                                                                                    confirmed: true,
+                                                                                                                                }
+                                                                                                                            )
+                                                                                                                    );
+                                                                                                                }}
+                                                                                                            />
+                                                                                                        )
+                                                                                                    }
+                                                                                                >
+                                                                                                    שחזור
+                                                                                                    לקודמת
+                                                                                                </button>
+                                                                                            </div>
+                                                                                        )
                                                                                     )
-                                                                                )
-                                                                            ) : (
-                                                                                <p>
-                                                                                    אין גרסאות
-                                                                                    שמורות.
-                                                                                </p>
-                                                                            )}
-                                                                        </Info>
-                                                                    );
-                                                                }, '')
-                                                            }
-                                                        >
-                                                            גרסאות ושחזור
-                                                        </button>
-                                                    </div>
-                                                </details>
-                                            </>
-                                        )}
-                                        <small className="muted">
-                                            סנכרון אחרון: {p.last_sync || 'טרם בוצע'}
-                                        </small>
+                                                                                ) : (
+                                                                                    <p>
+                                                                                        אין גרסאות
+                                                                                        שמורות.
+                                                                                    </p>
+                                                                                )}
+                                                                            </Info>
+                                                                        );
+                                                                    }, '')
+                                                                }
+                                                            >
+                                                                גרסאות ושחזור
+                                                            </button>
+                                                        </div>
+                                                    </details>
+                                                </>
+                                            )}
+                                            <small className="muted">
+                                                סנכרון אחרון: {p.last_sync || 'טרם בוצע'}
+                                            </small>
+                                        </ProjectActions>
                                     </section>
                                 ))}
                             </div>
@@ -1843,6 +1886,8 @@ function App() {
                                     )
                                 }
                                 serverAddresses={serverAddresses}
+                                managementHosts={managementHosts}
+                                publicationStatusKnown={publicationStatusKnown}
                                 publication={publications[fileProject.id]}
                                 jobs={jobs}
                                 console={openProjectConsole}

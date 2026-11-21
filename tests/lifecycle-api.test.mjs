@@ -26,6 +26,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
         calls = [],
         release;
     let gate = Promise.resolve();
+    let networkUnavailable = false;
     const helper = async (action, args) => {
         calls.push([action, args]);
         if (action === 'project-port-check')
@@ -41,6 +42,7 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
             return { keys: Object.keys(args.set), publicBuild: [], restartRequired: true };
         if (action === 'project-env-import' || action === 'project-env-preview')
             return { keys: ['API_KEY'], publicBuild: [], restartRequired: true };
+        if (action === 'network-status' && networkUnavailable) throw new Error('Probe unavailable');
         if (action.startsWith('network-'))
             return {
                 ip: '8.8.8.8',
@@ -101,7 +103,16 @@ test('lifecycle API preserves authentication, CSRF, secret reauthentication and 
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
-    assert.equal((await request('/project-access')).status, 200);
+    const access = await (await request('/project-access')).json();
+    assert.equal(access.publicationStatusKnown, true);
+    assert.ok(access.managementHosts.includes('lifecycle-test'));
+    assert.ok(access.managementHosts.includes('control.example.com'));
+    networkUnavailable = true;
+    const unavailable = await (await request('/project-access')).json();
+    assert.equal(unavailable.publicationStatusKnown, false);
+    assert.ok(unavailable.managementHosts.includes('lifecycle-test'));
+    assert.deepEqual(unavailable.publications, {});
+    networkUnavailable = false;
     assert.equal(
         (await (await request('/projects/demo/port-check?port=3000')).json()).status,
         'available'

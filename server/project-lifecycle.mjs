@@ -65,9 +65,28 @@ export function registerLifecycle({
                     Number(b.interface.startsWith('tailscale')) -
                     Number(a.interface.startsWith('tailscale'))
             );
-        const network = await helper('network-status').catch(() => ({}));
+        let publicationStatusKnown = true;
+        const network = await helper('network-status').catch(() => {
+            publicationStatusKnown = false;
+            return {};
+        });
+        publicationStatusKnown =
+            publicationStatusKnown && !!network?.projects && typeof network.projects === 'object';
+        const managementHosts = [
+            ...new Set([
+                ...origins().map((value) =>
+                    new URL(value).hostname.toLowerCase().replace(/\.$/, '')
+                ),
+                ...(network.domain ? [network.domain.toLowerCase().replace(/\.$/, '')] : []),
+            ]),
+        ];
         if (network.ip) addresses.unshift({ address: network.ip, interface: 'configured-public' });
-        res.json({ addresses, publications: network.projects || {} });
+        res.json({
+            addresses,
+            publications: network.projects || {},
+            managementHosts,
+            publicationStatusKnown,
+        });
     });
     const save = (record) => {
         if (record?.id)

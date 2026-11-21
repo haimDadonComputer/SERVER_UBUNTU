@@ -12,10 +12,12 @@ import {
     Loader2,
     Save,
     ExternalLink,
+    Folder,
 } from 'lucide-react';
 import { ErrorDetails } from './diagnostics';
 import { NetworkSettings } from './network';
 import { stageLabel } from './jobs';
+import { projectAccess } from './project-access';
 type Data = Record<string, any>;
 type Api = (path: string, method?: string, body?: unknown) => Promise<any>;
 function Popup({
@@ -51,6 +53,11 @@ export function ProjectActions({
     serverAddresses = [],
     publication,
     jobs = [],
+    managementHosts = null,
+    publicationStatusKnown = false,
+    onFiles,
+    onEnvironment,
+    children,
 }: {
     project: Data;
     api: Api;
@@ -61,6 +68,11 @@ export function ProjectActions({
     serverAddresses?: Data[];
     publication?: Data;
     jobs?: Data[];
+    managementHosts?: string[] | null;
+    publicationStatusKnown?: boolean;
+    onFiles?: () => void;
+    onEnvironment?: () => void;
+    children?: React.ReactNode;
 }) {
     const [modal, setModal] = useState(''),
         [requestBusy, setBusy] = useState(false),
@@ -112,15 +124,11 @@ export function ProjectActions({
         ) : (
             label
         );
-    const address = serverAddresses.find((a) => a.address !== location.hostname)?.address;
-    const automaticUrl =
-        p.runtime?.health === 'http' &&
-        p.runtime?.listenAddress === '0.0.0.0' &&
-        p.runtime?.port &&
-        address
-            ? `http://${address}:${p.runtime.port}/`
-            : '';
-    const projectUrl = p.launch_url || publication?.url || automaticUrl;
+    const access =
+        managementHosts === null
+            ? { url: '', reason: 'מידע הגישה עדיין לא זמין' }
+            : projectAccess(p, serverAddresses, publication, managementHosts, location.hostname);
+    const projectUrl = access.url;
     async function action(path: string, method = 'POST', body: Data = { confirmed: true }) {
         if (busy) return;
         setBusy(true);
@@ -152,6 +160,46 @@ export function ProjectActions({
     } catch {}
     return (
         <>
+            <div className="project-access-summary">
+                <span
+                    className={
+                        'publication-badge ' +
+                        (!publicationStatusKnown
+                            ? 'unknown'
+                            : publication
+                              ? 'published'
+                              : 'private')
+                    }
+                    title="מצב תצורת הפרסום; נגישות חיצונית אינה נבדקת"
+                >
+                    {!publicationStatusKnown
+                        ? 'מצב הפרסום לא זמין'
+                        : publication
+                          ? 'מפורסם באינטרנט'
+                          : 'לא מפורסם'}
+                </span>
+                {!archived &&
+                    (projectUrl ? (
+                        <a
+                            className="project-entry"
+                            href={projectUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={projectUrl}
+                        >
+                            <ExternalLink size={14} />
+                            כניסה לפרויקט
+                            <span className="mono" dir="ltr">
+                                {projectUrl}
+                            </span>
+                        </a>
+                    ) : (
+                        <div className="project-entry unavailable">
+                            <span>אין כרגע כתובת גישה</span>
+                            <small>{access.reason}</small>
+                        </div>
+                    ))}
+            </div>
             <div className="project-actions">
                 {archived ? (
                     <div className="project-controls lifecycle-actions">
@@ -174,172 +222,168 @@ export function ProjectActions({
                     </div>
                 ) : (
                     <>
-                        <div className="project-controls lifecycle-actions">
-                            {projectUrl ? (
-                                <a
-                                    className="button secondary"
-                                    href={projectUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                >
-                                    <ExternalLink size={15} />
-                                    כניסה לפרויקט
-                                </a>
-                            ) : (
-                                <button className="secondary" onClick={() => setModal('link')}>
-                                    <ExternalLink size={15} />
-                                    כניסה לפרויקט
+                        <div className="project-primary-actions">
+                            <button
+                                className="secondary"
+                                disabled={busy}
+                                onClick={() => setModal('publication')}
+                            >
+                                <ExternalLink size={14} />
+                                פרסום באינטרנט
+                            </button>
+                            <button
+                                className="secondary"
+                                disabled={busy}
+                                onClick={() => setModal('runtime')}
+                            >
+                                <Settings size={14} />
+                                הגדרות הפעלה
+                            </button>
+                            <button
+                                className="secondary"
+                                disabled={busy || !p.service}
+                                onClick={() => setModal('stop')}
+                            >
+                                <Square size={14} />
+                                {progress('stop', 'עצירה')}
+                            </button>
+                            <button
+                                className="secondary"
+                                disabled={busy || !p.runtime}
+                                onClick={() => setModal('restart')}
+                            >
+                                <RotateCw size={14} />
+                                {progress('restart', 'הפעלה מחדש')}
+                            </button>
+                            <button
+                                className="secondary"
+                                disabled={busy || !p.runtime}
+                                onClick={() => setModal('activate')}
+                            >
+                                <RefreshCw size={14} />
+                                {progress('activate', 'עדכון ופריסה')}
+                            </button>
+                            <button
+                                className="secondary danger-text"
+                                disabled={busy}
+                                onClick={() => setModal('archive')}
+                            >
+                                <Archive size={14} />
+                                העבר לארכיון
+                            </button>
+                            {onFiles && (
+                                <button className="secondary" onClick={onFiles}>
+                                    <Folder size={14} />
+                                    קבצים
                                 </button>
                             )}
-                            <button
-                                className="primary"
-                                disabled={busy}
-                                onClick={() => setModal(p.runtime ? 'start' : 'runtime')}
-                            >
-                                <Play size={15} />
-                                {progress('start', 'הפעלת פרויקט')}
-                            </button>
-                            <button className="secondary" onClick={() => openConsole(p.id)}>
-                                <Terminal size={15} />
-                                קונסול הפרויקט
-                            </button>
+                            {onEnvironment && (
+                                <button className="secondary" onClick={onEnvironment}>
+                                    <Settings size={14} />
+                                    משתני סביבה
+                                </button>
+                            )}
                         </div>
                         <details className="project-manage">
-                            <summary>
-                                <Settings size={15} />
-                                ניהול הפרויקט
-                            </summary>
-                            <div className="project-action-group">
-                                <span>הפעלה ופריסה</span>
+                            <summary>עוד</summary>
+                            <div className="project-controls lifecycle-actions">
                                 <button
-                                    className="secondary"
+                                    className="primary"
                                     disabled={busy}
-                                    onClick={() => setModal('runtime')}
+                                    onClick={() => setModal(p.runtime ? 'start' : 'runtime')}
                                 >
-                                    <Settings size={14} />
-                                    הגדרות הפעלה
+                                    <Play size={15} />
+                                    {progress('start', 'הפעלת פרויקט')}
                                 </button>
-                                <button
-                                    className="secondary"
-                                    disabled={busy || !p.service}
-                                    onClick={() => setModal('stop')}
-                                >
-                                    <Square size={14} />
-                                    {progress('stop', 'עצירה')}
-                                </button>
-                                <button
-                                    className="secondary"
-                                    disabled={busy || !p.runtime}
-                                    onClick={() => setModal('restart')}
-                                >
-                                    <RotateCw size={14} />
-                                    {progress('restart', 'הפעלה מחדש')}
-                                </button>
-                                <button
-                                    className="secondary"
-                                    disabled={busy || !p.runtime}
-                                    onClick={() => setModal('activate')}
-                                >
-                                    <RefreshCw size={14} />
-                                    {progress('activate', 'עדכון ופריסה')}
-                                </button>
-                            </div>
-                            <div className="project-action-group">
-                                <span>גישה ופרסום</span>
-                                <button
-                                    className="secondary"
-                                    disabled={busy}
-                                    onClick={() => setModal('publication')}
-                                >
-                                    <ExternalLink size={14} />
-                                    פרסום באינטרנט / HTTPS
+                                <button className="secondary" onClick={() => openConsole(p.id)}>
+                                    <Terminal size={15} />
+                                    קונסול הפרויקט
                                 </button>
                                 <button
                                     className="secondary"
                                     onClick={() => {
-                                        setLaunchUrl(projectUrl);
+                                        setLaunchUrl(p.launch_url || projectUrl);
                                         setModal('link');
                                     }}
                                 >
                                     כתובת פתיחה
                                 </button>
                             </div>
-                            <div className="project-action-group danger-zone">
-                                <span>ארכיון</span>
-                                <button
-                                    className="text-btn danger-text"
-                                    disabled={busy}
-                                    onClick={() => setModal('archive')}
-                                >
-                                    <Archive size={14} />
-                                    העברה לארכיון
-                                </button>
+                            <div className="project-update-status">
+                                <label>
+                                    עדכוני GitHub
+                                    <select
+                                        aria-label={'עדכונים עבור ' + p.name}
+                                        value={p.updates || 'manual'}
+                                        disabled={busy || !p.repo || !p.runtime}
+                                        onChange={(e) =>
+                                            void action('updates', 'PATCH', {
+                                                mode: e.target.value,
+                                            })
+                                        }
+                                    >
+                                        <option value="manual">ידני — עדכון בלחיצה</option>
+                                        <option value="auto">אוטומטי — בדיקה כל דקה</option>
+                                    </select>
+                                </label>
+                                <small>
+                                    שירות:{' '}
+                                    {p.desired === 'running'
+                                        ? 'נדרש לפעול'
+                                        : p.runtime
+                                          ? 'כבוי'
+                                          : 'טרם הוגדר'}{' '}
+                                    · פריסה:{' '}
+                                    {(
+                                        {
+                                            healthy: 'תקינה',
+                                            prepared: 'גרסה מוכנה',
+                                            'prepared-stopped': 'מוכנה להפעלה',
+                                            failed: 'נכשלה',
+                                            'failed-rolled-back': 'נכשלה; הגרסה הקודמת שוחזרה',
+                                            restored: 'שוחזרה',
+                                        } as Data
+                                    )[p.deployment] || 'טרם בוצעה'}
+                                </small>
+                                <details className="release-details">
+                                    <summary>פרטי גרסה ועדכונים</summary>
+                                    <div className="commit-grid">
+                                        {[
+                                            ['קומיט מרוחק', updates.remoteCommit || p.remoteCommit],
+                                            ['גרסה מוכנה', p.preparedCommit],
+                                            ['גרסה פעילה', p.activeCommit],
+                                            ['קומיט שנכשל', p.failedCommit || updates.failedCommit],
+                                        ].map(([label, value]) => (
+                                            <span key={label}>
+                                                {label}:{' '}
+                                                <b className="mono">
+                                                    {value ? String(value).slice(0, 14) : '—'}
+                                                </b>
+                                            </span>
+                                        ))}
+                                    </div>
+                                    <small>
+                                        בדיקה אחרונה:{' '}
+                                        {updates.checkedAt || p.checkedAt
+                                            ? new Date(
+                                                  updates.checkedAt || p.checkedAt
+                                              ).toLocaleString('he-IL')
+                                            : 'טרם נבדק'}
+                                    </small>
+                                    {updates.remoteCommit &&
+                                        updates.remoteCommit !== p.preparedCommit && (
+                                            <small>
+                                                ממתין לעדכון: {updates.remoteCommit.slice(0, 14)}
+                                            </small>
+                                        )}
+                                </details>
+                                {updates.error && <p className="danger-text">{updates.error}</p>}
                             </div>
+                            {children}
                         </details>
                     </>
                 )}
             </div>
-            {!archived && (
-                <div className="project-update-status">
-                    <label>
-                        עדכוני GitHub
-                        <select
-                            aria-label={'עדכונים עבור ' + p.name}
-                            value={p.updates || 'manual'}
-                            disabled={busy || !p.repo || !p.runtime}
-                            onChange={(e) =>
-                                void action('updates', 'PATCH', { mode: e.target.value })
-                            }
-                        >
-                            <option value="manual">ידני — עדכון בלחיצה</option>
-                            <option value="auto">אוטומטי — בדיקה כל דקה</option>
-                        </select>
-                    </label>
-                    <small>
-                        שירות:{' '}
-                        {p.desired === 'running' ? 'נדרש לפעול' : p.runtime ? 'כבוי' : 'טרם הוגדר'}{' '}
-                        · פריסה:{' '}
-                        {(
-                            {
-                                healthy: 'תקינה',
-                                prepared: 'גרסה מוכנה',
-                                'prepared-stopped': 'מוכנה להפעלה',
-                                failed: 'נכשלה',
-                                'failed-rolled-back': 'נכשלה; הגרסה הקודמת שוחזרה',
-                                restored: 'שוחזרה',
-                            } as Data
-                        )[p.deployment] || 'טרם בוצעה'}
-                    </small>
-                    <details className="release-details">
-                        <summary>פרטי גרסה ועדכונים</summary>
-                        <div className="commit-grid">
-                            {[
-                                ['קומיט מרוחק', updates.remoteCommit || p.remoteCommit],
-                                ['גרסה מוכנה', p.preparedCommit],
-                                ['גרסה פעילה', p.activeCommit],
-                                ['קומיט שנכשל', p.failedCommit || updates.failedCommit],
-                            ].map(([label, value]) => (
-                                <span key={label}>
-                                    {label}:{' '}
-                                    <b className="mono">
-                                        {value ? String(value).slice(0, 14) : '—'}
-                                    </b>
-                                </span>
-                            ))}
-                        </div>
-                        <small>
-                            בדיקה אחרונה:{' '}
-                            {updates.checkedAt || p.checkedAt
-                                ? new Date(updates.checkedAt || p.checkedAt).toLocaleString('he-IL')
-                                : 'טרם נבדק'}
-                        </small>
-                        {updates.remoteCommit && updates.remoteCommit !== p.preparedCommit && (
-                            <small>ממתין לעדכון: {updates.remoteCommit.slice(0, 14)}</small>
-                        )}
-                    </details>
-                    {updates.error && <p className="danger-text">{updates.error}</p>}
-                </div>
-            )}
             {error && (
                 <div className="alert error">
                     <div className="grow">

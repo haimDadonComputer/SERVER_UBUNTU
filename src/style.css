@@ -830,6 +830,7 @@ td a {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 20px;
 }
+
 .project-card {
     padding: 23px;
 }
@@ -1084,7 +1085,11 @@ footer span:first-child {
     padding: 20px 0;
     margin-bottom: 20px;
 }
-.modal > .panel-heading { position:sticky; top:0; z-index:3; }
+.modal > .panel-heading {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+}
 .modal .panel-heading > button,
 .jobs-drawer > .panel-heading > button {
     flex-shrink: 0;
@@ -2138,4 +2143,107 @@ footer span:first-child {
         margin: 12px;
         padding: 16px;
     }
+}
+
+/* Compact project cards: primary controls stay visible, details live in More. */
+.workspace .project-grid {
+    gap: 16px;
+}
+.workspace .project-grid .project-card {
+    padding: 18px;
+    min-width: 0;
+}
+.project-card .project-top {
+    margin-bottom: 10px;
+}
+.project-card .project-identity small {
+    display: none;
+}
+.project-card .project-path,
+.project-card .repo-link {
+    display: block;
+    margin: 8px 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-align: start;
+}
+.project-card .project-access-summary {
+    margin: 12px 0;
+}
+.publication-badge {
+    display: inline-flex;
+    border-radius: 6px;
+    padding: 4px 8px;
+    background: var(--surface2);
+    color: var(--muted);
+    font-size: 12px;
+}
+.publication-badge.published {
+    color: var(--green);
+}
+.project-entry {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+    font-size: 13px;
+    min-width: 0;
+}
+.project-entry .mono {
+    flex-basis: 100%;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+    text-align: start;
+}
+.project-entry.unavailable {
+    color: var(--muted);
+}
+.project-entry small {
+    flex-basis: 100%;
+    font-size: 11px;
+}
+.project-primary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+.project-primary-actions > button {
+    min-width: 0;
+    min-height: 40px;
+    padding: 8px;
+    font-size: 12px;
+    justify-content: center;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.project-primary-actions svg {
+    flex-shrink: 0;
+}
+.project-card .project-job-status {
+    margin: 8px 0;
+    padding: 7px 10px;
+}
+/* Override the older wide-card breakpoint and spacing. */
+@media (min-width: 1100px) {
+    .workspace .project-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@media (max-width: 1099px) {
+    .workspace .project-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+.workspace .project-grid .project-card .project-path {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+}
+.workspace .project-grid .project-card .repo-link {
+    margin-bottom: 8px;
+}
+.workspace .project-grid .project-card .project-manage > summary {
+    padding-block: 10px;
 }

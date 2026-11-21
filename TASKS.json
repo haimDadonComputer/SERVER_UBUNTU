@@ -106,6 +106,12 @@
             "verification": "28 Node tests passed; Python 138 total, 123 passed and 15 platform skips; production build passed. Three focused Edge DOM scenarios passed, covering desktop/mobile card layout, links, publication failures and lifecycle/file/environment/archive behavior. Ubuntu integration unverified."
         },
         {
+            "id": "publication-local-verification-and-status",
+            "status": "implemented",
+            "description": "Verify explicit project publication through its local public proxy endpoint before commit; preserve rollback diagnostics, configured state during optional probe failures and clarify process versus publication/history status",
+            "verification": "Node/build and focused Edge DOM checks passed. Mocked publication tests cover HTTP/TLS failures, rollback, probe availability and primary-error preservation. Ubuntu integration and actual Internet reachability remain unverified; the supplied newer restart log is successful."
+        },
+        {
             "id": "ubuntu-live-validation",
             "status": "pending",
             "reason": "No Ubuntu server connection provided"

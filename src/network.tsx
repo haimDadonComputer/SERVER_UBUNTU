@@ -8,11 +8,13 @@ export function NetworkSettings({
     totpEnabled,
     project,
     onQueued,
+    lastJob,
 }: {
     api: Api;
     totpEnabled: boolean;
     project?: Data;
     onQueued?: () => void;
+    lastJob?: Data;
 }) {
     const [state, setState] = useState<Data | null>(null),
         [fields, setFields] = useState<Data>({ ip: '', domain: '', email: '' });
@@ -27,7 +29,14 @@ export function NetworkSettings({
         [confirmed, setConfirmed] = useState(false);
     const [networkJob, setNetworkJob] = useState<Data | null>(null);
     const [domain, setDomain] = useState('');
+    const [statusError, setStatusError] = useState('');
     const busy = requestBusy || !!networkJob;
+    useEffect(() => {
+        if (lastJob?.status === 'failed') {
+            setError(lastJob.error || 'פעולת הפרסום האחרונה נכשלה.');
+            setDetails(lastJob.details || null);
+        }
+    }, [lastJob?.id]);
     useEffect(() => {
         if (!networkJob) return;
         let stopped = false;
@@ -36,17 +45,29 @@ export function NetworkSettings({
                 void api('/jobs/' + networkJob.id + '/events')
                     .then((data) => {
                         if (stopped) return;
+                        setStatusError('');
                         if (['queued', 'running'].includes(data.job.status)) {
                             setNetworkJob(data.job);
                             return;
                         }
                         setNetworkJob(null);
                         if (data.job.status === 'done')
-                            setNotice('הפעולה הושלמה. הכתובת ומצב התעודה עודכנו.');
-                        else setError('פעולת הפרסום נכשלה. הפירוט מופיע בפאנל המשימות.');
-                        void refresh().catch((e) => setError(e.message));
+                            setNotice(
+                                'פעולת הפרסום הושלמה. מצב הכתובת והבדיקה המקומית מוצג למטה; נגישות מבחוץ טרם אומתה.'
+                            );
+                        else {
+                            setNotice('');
+                            setError(data.job.error || 'פעולת הפרסום נכשלה.');
+                            setDetails(data.job.details || null);
+                        }
+                        void refresh().catch(() => {});
                     })
-                    .catch(() => {}),
+                    .catch(() => {
+                        if (!stopped)
+                            setStatusError(
+                                'לא ניתן לקבל כרגע את התקדמות הפעולה. המעקב ינסה להתחבר מחדש.'
+                            );
+                    }),
             1500
         );
         return () => {
@@ -55,9 +76,16 @@ export function NetworkSettings({
         };
     }, [networkJob?.id]);
     async function refresh() {
-        const data = await api('/network');
-        setState(data);
-        return data;
+        try {
+            const data = await api('/network');
+            setState(data);
+            setStatusError('');
+            return data;
+        } catch (error) {
+            setState(null);
+            setStatusError((error as Error).message);
+            throw error;
+        }
     }
     useEffect(() => {
         void refresh()
@@ -76,6 +104,7 @@ export function NetworkSettings({
         if (busy) return;
         setBusy(true);
         setError('');
+        setDetails(null);
         setNotice('');
         try {
             const result = await api(path, method, {
@@ -128,9 +157,20 @@ export function NetworkSettings({
                 <>
                     <p>כתובת השרת: {state?.ip || 'יש להגדיר IP בהגדרות ואבטחה'}</p>
                     <p>
-                        מצב פרסום: {publication ? 'מופעל' : 'פרטי'} · מאזין מקומי של ה־proxy:{' '}
-                        {publication?.listening ? 'פעיל' : 'לא אומת'}
+                        מצב פרסום: {!state ? 'לא זמין' : publication ? 'מוגדר' : 'לא מפורסם'} ·
+                        האזנת Nginx:{' '}
+                        {publication?.listening === true
+                            ? 'זוהתה בשרת'
+                            : publication?.listening === false
+                              ? 'לא זוהתה'
+                              : 'לא ידוע'}
                     </p>
+                    {publication?.localCheck?.status === 'passed' && (
+                        <p>
+                            בדיקת HTTP דרך הפרסום עברה מהשרת ({publication.localCheck.httpStatus}) ·{' '}
+                            {new Date(publication.localCheck.checkedAt).toLocaleString('he-IL')}
+                        </p>
+                    )}
                     {publication && (
                         <a href={publication.url} target="_blank" rel="noreferrer">
                             {publication.url}
@@ -181,6 +221,10 @@ export function NetworkSettings({
                 {state?.prepared ? 'מוכנה' : 'נדרש שדרוג המערכת להכנה אוטומטית של HTTPS'}
             </p>
             <p>נגישות מרשת חיצונית: טרם אומתה. יש לבדוק גם את חומת האש של Contabo.</p>
+            {statusError && <p role="alert">מידע מצב הפרסום לא זמין: {statusError}</p>}
+            {state?.probeDiagnostics?.map((diagnostic: Data, index: number) => (
+                <ErrorDetails key={index} details={diagnostic} />
+            ))}
             {!project && (
                 <>
                     <p>

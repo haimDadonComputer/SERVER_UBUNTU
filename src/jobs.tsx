@@ -20,6 +20,7 @@ export const stageLabel = (stage: string) =>
             'proxy-configuration': 'מכין תצורת HTTPS',
             'proxy-validation': 'בודק תצורת Nginx',
             'proxy-reload': 'מפעיל את הפרסום',
+            'publication-health': 'בודק תגובת HTTP דרך הפרסום',
             'npm-install': 'מתקין תלויות',
             'npm-ci': 'מתקין תלויות',
             'npm-test': 'בודק',

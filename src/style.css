@@ -2247,3 +2247,24 @@ footer span:first-child {
 .workspace .project-grid .project-card .project-manage > summary {
     padding-block: 10px;
 }
+.project-process-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.project-process-status > small {
+    color: var(--muted);
+    font-size: 11px;
+}
+.publication-failure {
+    border-inline-start: 3px solid var(--red);
+    background: var(--surface2);
+    padding: 8px 10px;
+    margin: 10px 0;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+.publication-failure > p {
+    margin: 4px 0;
+}

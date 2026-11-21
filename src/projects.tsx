@@ -88,6 +88,9 @@ export function ProjectActions({
     );
     const observed = pendingJob && jobs.find((job) => job.id === pendingJob.id);
     const activeJob = running || (pendingJob && !observed ? pendingJob : null);
+    const publicationJob = jobs.find(
+        (job) => job.resource === 'project:' + p.id && job.action === 'network-project'
+    );
     const busy = requestBusy || !!activeJob || !!p.recoveryPending;
     useEffect(() => {
         if (observed && !['queued', 'running'].includes(observed.status)) setPendingJob(null);
@@ -200,6 +203,13 @@ export function ProjectActions({
                         </div>
                     ))}
             </div>
+            {publicationJob?.status === 'failed' && (
+                <div className="publication-failure" role="alert">
+                    <p>פעולת הפרסום האחרונה נכשלה; מצב התהליך מוצג בנפרד.</p>
+                    <p>{publicationJob.error}</p>
+                    <ErrorDetails details={publicationJob.details} jobId={publicationJob.id} />
+                </div>
+            )}
             <div className="project-actions">
                 {archived ? (
                     <div className="project-controls lifecycle-actions">
@@ -404,6 +414,7 @@ export function ProjectActions({
                         api={api}
                         totpEnabled={totpEnabled}
                         project={p}
+                        lastJob={publicationJob}
                         onQueued={onQueued}
                     />
                 </Popup>

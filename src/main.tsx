@@ -1395,37 +1395,40 @@ function App() {
                                                     </small>
                                                 </div>
                                             </div>
-                                            <Badge
-                                                value={projectStatus(p)}
-                                                label={
-                                                    p.lifecycle === 'archived'
-                                                        ? 'בארכיון'
-                                                        : projectStatus(p) === 'unconfigured'
-                                                          ? 'לא מוגדר'
-                                                          : projectStatus(p) === 'active'
-                                                            ? 'פועל'
-                                                            : projectStatus(p) === 'failed'
-                                                              ? 'נכשל'
-                                                              : ['inactive', 'stopped'].includes(
-                                                                      projectStatus(p)
-                                                                  )
-                                                                ? 'כבוי'
-                                                                : undefined
-                                                }
-                                            />
+                                            <div className="project-process-status">
+                                                <small>תהליך</small>
+                                                <Badge
+                                                    value={projectStatus(p)}
+                                                    label={
+                                                        p.lifecycle === 'archived'
+                                                            ? 'בארכיון'
+                                                            : projectStatus(p) === 'unconfigured'
+                                                              ? 'לא מוגדר'
+                                                              : projectStatus(p) === 'active'
+                                                                ? 'פועל'
+                                                                : projectStatus(p) === 'failed'
+                                                                  ? 'נכשל'
+                                                                  : [
+                                                                          'inactive',
+                                                                          'stopped',
+                                                                      ].includes(projectStatus(p))
+                                                                    ? 'כבוי'
+                                                                    : undefined
+                                                    }
+                                                />
+                                            </div>
                                         </div>
                                         {jobs
-                                            .filter(
-                                                (j) =>
-                                                    j.resource === 'project:' + p.id &&
-                                                    [
-                                                        'queued',
-                                                        'running',
-                                                        'failed',
-                                                        'interrupted',
-                                                    ].includes(j.status)
-                                            )
+                                            .filter((j) => j.resource === 'project:' + p.id)
                                             .slice(0, 1)
+                                            .filter((j) =>
+                                                [
+                                                    'queued',
+                                                    'running',
+                                                    'failed',
+                                                    'interrupted',
+                                                ].includes(j.status)
+                                            )
                                             .map((j) => (
                                                 <button
                                                     className="project-job-status"
@@ -1436,8 +1439,10 @@ function App() {
                                                         setJobPanel(true);
                                                     }}
                                                 >
-                                                    פעולה: {stageLabel(j.status)} ·{' '}
-                                                    {stageLabel(j.stage)}
+                                                    {j.action === 'network-project'
+                                                        ? 'פרסום'
+                                                        : 'פעולה'}
+                                                    : {stageLabel(j.status)} · {stageLabel(j.stage)}
                                                 </button>
                                             ))}
                                         <p

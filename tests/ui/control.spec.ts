@@ -400,6 +400,36 @@ test('compact project cards expose primary actions, safe links, truthful publica
     const archived = { ...projects[0], id: 'archived', name: 'archived', lifecycle: 'archived' };
     let known = true,
         accessFailure = false;
+    let publicationAttempted = false;
+    const publicationDiagnostic = {
+        code: 'NGINX_BIND_PERMISSION',
+        stage: 'proxy-validation',
+        stderr: 'nginx: bind() to 192.0.2.20:80 failed (13: Permission denied)',
+        hint: 'Review the helper publication capability configuration.',
+    };
+    let projectJobs = [
+        {
+            id: 'queued-card',
+            resource: 'project:stopped',
+            action: 'project-start',
+            status: 'queued',
+            stage: 'queued',
+        },
+        {
+            id: 'building-card',
+            resource: 'project:running',
+            action: 'project-activate',
+            status: 'running',
+            stage: 'npm-build',
+        },
+        {
+            id: 'failed-card',
+            resource: 'project:failed',
+            action: 'project-start',
+            status: 'failed',
+            stage: 'health',
+        },
+    ];
     await page.route('**/api/projects?state=archived', (route) =>
         route.fulfill({ json: [archived] })
     );
@@ -418,29 +448,35 @@ test('compact project cards expose primary actions, safe links, truthful publica
     );
     await page.route('**/api/jobs', (route) =>
         route.fulfill({
-            json: [
-                {
-                    id: 'queued-card',
-                    resource: 'project:stopped',
-                    action: 'project-start',
-                    status: 'queued',
-                    stage: 'queued',
-                },
-                {
-                    id: 'building-card',
-                    resource: 'project:running',
-                    action: 'project-activate',
-                    status: 'running',
-                    stage: 'npm-build',
-                },
-                {
-                    id: 'failed-card',
-                    resource: 'project:failed',
+            json: projectJobs,
+        })
+    );
+    await page.route('**/api/network', (route) =>
+        route.fulfill({
+            json: {
+                ip: '192.0.2.20',
+                domain: '',
+                email: 'test@example.test',
+                projects: {},
+                prepared: true,
+            },
+        })
+    );
+    await page.route('**/api/projects/running/publication', (route) => {
+        publicationAttempted = true;
+        return route.fulfill({ status: 202, json: { job: 'publication-test' } });
+    });
+    await page.route('**/api/jobs/publication-test/events', (route) =>
+        route.fulfill({
+            json: {
+                job: {
+                    id: 'publication-test',
                     status: 'failed',
-                    stage: 'health',
-                    error: 'health failed',
+                    error: 'Nginx validation failed',
+                    details: publicationDiagnostic,
                 },
-            ],
+                events: [],
+            },
         })
     );
     await page.route('**/api/project-access', (route) =>
@@ -525,6 +561,39 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await expandDetails(card.locator('.project-manage'));
     await expect(card.getByRole('button', { name: 'קונסול הפרויקט', exact: true })).toBeVisible();
     await card.locator('.project-manage > summary').click();
+    // A successful newer operation must not resurrect an older failure.
+    projectJobs = projectJobs.filter((job) => job.resource !== 'project:running');
+    projectJobs.unshift({
+        id: 'older-failure',
+        resource: 'project:running',
+        action: 'project-start',
+        status: 'failed',
+        stage: 'health',
+    });
+    projectJobs.unshift({
+        id: 'newer-success',
+        resource: 'project:running',
+        action: 'project-start',
+        status: 'done',
+        stage: 'done',
+    });
+    await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
+    await expect(card.locator('.project-job-status')).toHaveCount(0);
+    await card.getByRole('button', { name: 'פרסום באינטרנט', exact: true }).click();
+    const publishDialog = page.getByRole('dialog', { name: 'פרסום הפרויקט', exact: true });
+    await publishDialog.getByLabel('סיסמה נוכחית').fill('test-only-long-password');
+    await publishDialog.getByRole('checkbox', { name: /אני מאשר/ }).check();
+    await publishDialog.getByRole('button', { name: 'פתיחה לאינטרנט', exact: true }).click();
+    await expect(
+        publishDialog.getByRole('alert').filter({ hasText: 'Nginx validation failed' })
+    ).toBeVisible();
+    expect(publicationAttempted).toBe(true);
+    await expandDetails(publishDialog.locator('.error-details'));
+    await expect(publishDialog.getByText('NGINX_BIND_PERMISSION', { exact: true })).toBeVisible();
+    await expect(
+        publishDialog.getByText(publicationDiagnostic.stderr, { exact: true })
+    ).toBeVisible();
+    await publishDialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     known = false;
     await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
     await expect(card.getByText('מצב הפרסום לא זמין', { exact: true })).toBeVisible();

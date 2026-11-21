@@ -106,6 +106,70 @@ class PublicationTests(unittest.TestCase):
         self.backend={'run':self.run,'parse_ss':lambda text:[],'all_projects':lambda _: {'demo':self.record},'project_identifier':lambda value:value,'FIREWALL_WORK':threading.Event()}
         self.pub=Publication(self.cfg,self.backend);self.pub.directory.mkdir();self.pub.acme.mkdir();(self.pub.acme/'prepared').touch()
         self.pub.save({**self.pub.read(),'ip':'8.8.8.8','domain':'control.example.com','email':'admin@example.com'})
+        verify_patch=patch.object(self.pub,'verify_project');self.verify=verify_patch.start();self.addCleanup(verify_patch.stop)
+    def test_public_proxy_probe_uses_local_ip_real_host_verified_tls_and_no_body(self):
+        data=self.pub.read();data['projects']['demo']={'port':443,'https':True,'domain':'forms.example.com'}
+        self.record['runtime']['healthPath']='/health'
+        with patch('publication.http.client.HTTPConnection') as factory,patch('publication.ssl.create_default_context') as context:
+            connection=factory.return_value;connection.getresponse.return_value.status=200
+            Publication.verify_project(self.pub,data,'demo',self.record)
+            factory.assert_called_once_with('8.8.8.8',443,timeout=5)
+            self.assertEqual(context.return_value.wrap_socket.call_args.kwargs['server_hostname'],'forms.example.com')
+            connection.request.assert_called_once_with('GET','/health',headers={'Host':'forms.example.com','Connection':'close'})
+            connection.getresponse.return_value.read.assert_not_called();connection.close.assert_called_once()
+        self.assertEqual(data['projects']['demo']['localCheck']['httpStatus'],200)
+        self.assertNotIn('externalReachability',data['projects']['demo'])
+    def test_public_proxy_status_redirect_tls_and_connection_failures_are_not_success(self):
+        from diagnostics import OperationError
+        import ssl
+        for response,expected in ((403,'PUBLICATION_HTTP_STATUS'),(302,'PUBLICATION_HTTP_STATUS'),(ssl.SSLError('certificate invalid'),'PUBLICATION_TLS_FAILED'),(ConnectionRefusedError('refused'),'PUBLICATION_UNREACHABLE')):
+            with self.subTest(response=response),patch('publication.http.client.HTTPConnection') as factory:
+                data=self.pub.read();data['projects']['demo']={'port':4000,'https':False}
+                if isinstance(response,Exception):factory.return_value.request.side_effect=response
+                else:factory.return_value.getresponse.return_value.status=response
+                with self.assertRaises(OperationError) as caught:Publication.verify_project(self.pub,data,'demo',self.record)
+                self.assertEqual(caught.exception.details['code'],expected)
+                self.assertIn('http://8.8.8.8:4000/',caught.exception.details['stderr'])
+                self.assertNotIn('localCheck',data['projects']['demo'])
+                factory.return_value.getresponse.return_value.read.assert_not_called()
+    def test_failed_public_http_check_rolls_back_publication(self):
+        from diagnostics import OperationError
+        self.verify.side_effect=OperationError('Public origin rejected',{'code':'PUBLICATION_HTTP_STATUS','stage':'publication-health','httpStatus':403})
+        with patch.object(self.pub,'interfaces'):
+            with self.assertRaises(OperationError) as caught:self.pub.publish('demo',{'enabled':True,'confirmed':True,'port':4000})
+        self.assertEqual(caught.exception.details['httpStatus'],403)
+        self.assertFalse(self.pub.read()['projects']);self.assertFalse(self.pub.path('challenge.conf').exists())
+        self.assertFalse((self.pub.state/'pending.json').exists())
+    def test_public_probe_retries_only_transient_reload_failures_and_retains_http_error(self):
+        from diagnostics import OperationError
+        temporary=OperationError('not ready',{'code':'PUBLICATION_UNREACHABLE'})
+        with patch.object(self.pub,'verify_project_once',side_effect=[temporary,None]) as probe,patch('publication.time.sleep') as sleep:
+            Publication.verify_project(self.pub,{},'demo',self.record)
+            self.assertEqual(probe.call_count,2);sleep.assert_called_once_with(0.25)
+        with patch('publication.http.client.HTTPConnection') as factory:
+            data=self.pub.read();data['projects']['demo']={'port':4000,'https':False}
+            factory.return_value.getresponse.return_value.status=403
+            factory.return_value.close.side_effect=OSError('cleanup failed')
+            with self.assertRaises(OperationError) as caught:Publication.verify_project(self.pub,data,'demo',self.record)
+            self.assertEqual(caught.exception.details['httpStatus'],403)
+            self.assertEqual(factory.return_value.request.call_count,1)
+    def test_recovery_failure_keeps_primary_diagnostics_and_pending_journal(self):
+        from diagnostics import OperationError
+        primary=OperationError('Nginx validation failed',{'code':'NGINX_PRIMARY','stage':'proxy-validation','stderr':'primary token=private-token','exitCode':1})
+        def run(argv,**kwargs):
+            if argv==['/usr/sbin/nginx','-t']:raise primary
+            return 'Status: inactive'
+        self.run.side_effect=run
+        with self.assertRaises(OperationError) as caught:self.pub.transaction(self.pub.read(),self.pub.read(),{'management.conf':'new config'})
+        self.assertEqual(caught.exception.details['code'],'NGINX_PRIMARY');self.assertEqual(caught.exception.details['exitCode'],1)
+        self.assertNotIn('private-token',str(caught.exception.details));self.assertIn('Recovery also failed',caught.exception.details['hint'])
+        self.assertTrue((self.pub.state/'pending.json').exists())
+    def test_status_keeps_configuration_when_optional_probes_fail(self):
+        data=self.pub.read();data['projects']['demo']={'port':4000,'url':'http://8.8.8.8:4000/'};self.pub.save(data)
+        self.run.side_effect=OSError('probe unavailable')
+        result=self.pub.status()
+        self.assertIn('demo',result['projects']);self.assertIsNone(result['projects']['demo']['listening'])
+        self.assertEqual(result['externalReachability'],'unverified');self.assertEqual(len(result['probeDiagnostics']),2)
     def test_plain_publication_and_disable_preserve_unrelated_files(self):
         unrelated=self.pub.directory/'operator.conf';unrelated.write_text('operator content')
         with patch.object(self.pub,'interfaces'):

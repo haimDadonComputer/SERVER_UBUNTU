@@ -8,11 +8,14 @@ import pathlib
 import re
 import socket
 import threading
+import http.client
+import ssl
+import time
 from project_secrets import atomic_private
 from project_lifecycle import Lifecycle, project_lock, BUILD_LOCK, REGISTRY_LOCK, PROJECT_LOCKS
 from project_storage import Storage
 from job_progress import emit
-from diagnostics import OperationError
+from diagnostics import OperationError,exception_details
 
 NETWORK_LOCK=threading.RLock()
 DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[]}
@@ -47,16 +50,20 @@ class Publication:
         data['prepared']=(self.acme/'prepared').is_file()
         data['addressConfigured']=bool(data['ip'])
         data['externalReachability']='unverified'
-        listeners=self.h['parse_ss'](self.h['run'](['/usr/bin/ss','-H','-lntup']))
+        data['probeDiagnostics']=[]
+        try:listeners=self.h['parse_ss'](self.h['run'](['/usr/bin/ss','-H','-lntup']))
+        except Exception as error:
+            listeners=None;data['probeDiagnostics'].append(exception_details(error,'publication-listeners',self.directory).details)
         for item in data['projects'].values():
-            item['listening']=any(row.get('address')==data['ip'] and row.get('port')==item['port'] and row.get('process')=='nginx' for row in listeners)
+            item['listening']=None if listeners is None else any(row.get('address')==data['ip'] and row.get('port')==item['port'] and row.get('process')=='nginx' for row in listeners)
         for kind,cert in data['certificates'].items():
             path=self.acme/'certbot/live'/kind/'cert.pem'
             if path.is_file():
                 try:cert['validity']=self.h['run'](['/usr/bin/openssl','x509','-in',str(path),'-noout','-dates']).strip()
                 except Exception:cert['validity']='unavailable'
-        result=self.h['run'](['/usr/bin/systemctl','show','ubuntu-control-cert-renew.service','-p','Result','-p','ExecMainExitTimestamp'],check=False)
-        data['renewal']=result.strip()
+        try:data['renewal']=self.h['run'](['/usr/bin/systemctl','show','ubuntu-control-cert-renew.service','-p','Result','-p','ExecMainExitTimestamp'],check=False).strip()
+        except Exception as error:
+            data['renewal']='unavailable';data['probeDiagnostics'].append(exception_details(error,'publication-renewal',self.directory).details)
         return data
     def settings(self,args):
         data=self.read()
@@ -88,7 +95,54 @@ class Publication:
     def fw_rule(self,ip,port,delete=False):
         args=['allow','in','proto','tcp','from','any','to',ip,'port',str(port),'comment','uc-publication-'+str(port)]
         self.h['run'](['/usr/sbin/ufw',*(['--force','delete'] if delete else []),*args])
-    def transaction(self,before,after,changes):
+    def preserve_failure(self,error,recovery):
+        try:recovery()
+        except Exception as recovery_error:
+            primary=exception_details(error,'publication',self.directory)
+            details=dict(primary.details);details['hint']=details.get('hint','')+' Recovery also failed; inspect private recovery state before retrying: '+str(recovery_error)
+            raise OperationError(str(primary),details) from None
+    def verify_project(self,data,identifier,p):
+        # Reload signals Nginx asynchronously. Allow a short, bounded grace for
+        # its new listener/workers; never retry TLS/host-policy/auth failures.
+        for attempt in range(3):
+            try:return self.verify_project_once(data,identifier,p)
+            except OperationError as error:
+                transient=error.details.get('code')=='PUBLICATION_UNREACHABLE' or error.details.get('httpStatus') in (502,503,504)
+                if attempt==2 or not transient:raise
+                time.sleep(0.25)
+    def verify_project_once(self,data,identifier,p):
+        """Probe the owned public listener locally, without redirects or bodies.
+
+        Destination is the configured local interface, never a caller URL. TLS
+        checks the real public hostname/IP and uses the normal CA trust store.
+        This verifies the local proxy path, not the provider firewall or Internet.
+        """
+        item=data['projects'][identifier];ip=data['ip'];port=item['port']
+        if not ipaddress.IPv4Address(ip).is_global or type(port)!=int or not 1<=port<=65535:raise ValueError('Invalid local publication endpoint')
+        host=item.get('domain') or ip
+        if host!=ip and not valid_domain(host):raise ValueError('Invalid publication hostname')
+        path=p['runtime'].get('healthPath','/')
+        if not isinstance(path,str) or not path.startswith('/') or path.startswith('//') or len(path)>200 or any(ord(c)<33 for c in path):raise ValueError('Invalid publication health path')
+        public_host=host+(':'+str(port) if port!=(443 if item['https'] else 80) else '')
+        url=('https' if item['https'] else 'http')+'://'+public_host+path
+        emit('publication-health','Checking the public proxy endpoint from this server')
+        connection=http.client.HTTPConnection(ip,port,timeout=5)
+        try:
+            if item['https']:
+                connection.connect()
+                connection.sock=ssl.create_default_context().wrap_socket(connection.sock,server_hostname=host)
+            connection.request('GET',path,headers={'Host':public_host,'Connection':'close'})
+            response=connection.getresponse();status=response.status
+            if not 200<=status<300:
+                raise OperationError('בדיקת כתובת הפרסום נכשלה: HTTP '+str(status),{'code':'PUBLICATION_HTTP_STATUS','stage':'publication-health','httpStatus':status,'stderr':'Local proxy probe: '+url,'hint':'הפרסום לא אושר. בדקו שהאפליקציה מקבלת את שם המארח וה־Origin הציבוריים ושנתיב בדיקת התקינות מחזיר 2xx. תגובת האפליקציה אינה נשמרת בדוח.'})
+            item['localCheck']={'status':'passed','httpStatus':status,'url':url,'checkedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        except OperationError:raise
+        except (OSError,http.client.HTTPException) as error:
+            raise OperationError('לא ניתן לאמת את כתובת הפרסום דרך ה־proxy',{'code':'PUBLICATION_TLS_FAILED' if isinstance(error,ssl.SSLError) else 'PUBLICATION_UNREACHABLE','stage':'publication-health','stderr':'Local proxy probe: '+url+'; '+str(error),'hint':'בדקו האזנת Nginx, תוקף תעודה ותקינות האפליקציה. בדיקה זו נעשית מהשרת ואינה מאמתת את חומת האש אצל ספק השרת.'}) from None
+        finally:
+            try:connection.close()
+            except OSError:pass
+    def transaction(self,before,after,changes,verify=None):
         pending=self.state/'pending.json'
         if pending.exists():raise ValueError('Publication recovery is pending; inspect helper diagnostics')
         old={name:self.path(name).read_text() if self.path(name).exists() else None for name in changes}
@@ -114,10 +168,11 @@ class Publication:
             for port in journal['added']:self.fw_rule(journal['ip'],port)
             emit('proxy-reload','Applying validated proxy configuration')
             self.h['run'](['/usr/bin/systemctl','reload','nginx.service'])
+            if verify is not None:verify()
             for port in journal['removed']:self.fw_rule(journal['ip'],port,True)
             self.save(after);pending.unlink()
-        except Exception:
-            self.recover();raise
+        except Exception as error:
+            self.preserve_failure(error,self.recover);raise
     def recover(self):
         path=self.state/'pending.json'
         if not path.exists():return
@@ -268,19 +323,19 @@ class Publication:
             # domain-change transaction rolls back after issuance.
             certificate_kind='management' if management else 'project-'+life.names(identifier)['key']+'-'+hashlib.sha256(domain.encode()).hexdigest()[:12] if domain else 'ip'
             if tls:self.certificate(certificate_kind,data['domain'] if management else domain or data['ip'],data)
-        except Exception:
+        except Exception as error:
             if not challenge_ready:
                 failed=self.read();restored=copy.deepcopy(data);restored['certificates']=failed['certificates']
-                self.transaction(failed,restored,{'challenge.conf':None})
+                self.preserve_failure(error,lambda:self.transaction(failed,restored,{'challenge.conf':None}))
             raise
         if management:data['management']=True
         else:data['projects'][identifier]={'enabled':True,'port':port,'https':tls,'upstream':upstream,'domain':domain,'certificate':certificate_kind,'url':('https' if tls else 'http')+'://'+(domain if domain else data['ip']+':'+str(port))+'/','externalReachability':'unverified'}
         data.pop('challengePending',None)
         changes={name:self.proxy(data,port,upstream,tls,management,storage=() if management else p.get('writableDirectories',[]),domain=domain,certificate_kind=certificate_kind)}
         changes['challenge.conf']=self.challenge(data)
-        try:self.transaction(before,data,changes)
-        except Exception:
-            if not challenge_ready and not (self.state/'pending.json').exists():self.clear_bootstrap()
+        try:self.transaction(before,data,changes,verify=None if management else lambda:self.verify_project(data,identifier,p))
+        except Exception as error:
+            if not challenge_ready and not (self.state/'pending.json').exists():self.preserve_failure(error,self.clear_bootstrap)
             raise
         return self.status()
 

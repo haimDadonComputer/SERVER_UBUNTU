@@ -16,6 +16,7 @@ import { metrics } from './metrics.mjs';
 import { sanitizeDetails, storedDetails } from './diagnostics.mjs';
 import { registerLifecycle, reconcileProjects, projectView } from './project-lifecycle.mjs';
 import { registerNetwork } from './network.mjs';
+import { createNetworkStatus } from './network-status.mjs';
 
 const credentials = z.object({
     username: z.string().min(3).max(64),
@@ -45,7 +46,8 @@ const projectInput = z.object({
 });
 export async function createApp({ db, config, helper }) {
     const app = express(),
-        queue = new Queue(db);
+        queue = new Queue(db),
+        networkStatus = createNetworkStatus(helper);
     app.disable('x-powered-by');
     app.set('trust proxy', 'loopback');
     app.use(
@@ -63,7 +65,12 @@ export async function createApp({ db, config, helper }) {
             strictTransportSecurity: config.dev ? false : undefined,
         })
     );
-    app.use(express.json({ limit: '1500kb' }));
+    const envImportPath = /^\/api\/projects\/[a-z][a-z0-9-]{1,40}\/env\/import(?:\/preview)?\/?$/;
+    const normalJson = express.json({ limit: '1500kb' });
+    // A UTF-8 file can expand sixfold inside JSON. Only authenticated ENV
+    // import requests receive the larger transport allowance; raw text stays 1 MiB.
+    const envJson = express.json({ limit: '7mb' });
+    const envText = express.text({ type: 'text/plain', limit: '1mb', defaultCharset: 'utf-8' });
     app.use(
         '/api',
         rateLimit({ windowMs: 60000, limit: 180, standardHeaders: 'draft-8', legacyHeaders: false })
@@ -78,6 +85,9 @@ export async function createApp({ db, config, helper }) {
         next();
     });
     app.get('/api/health', (_req, res) => res.json({ ok: true }));
+    app.use((req, res, next) =>
+        envImportPath.test(req.path) ? next() : normalJson(req, res, next)
+    );
     const dummy = await argon2.hash(token(), { type: argon2.argon2id });
     const cookieOptions = {
         httpOnly: true,
@@ -98,8 +108,21 @@ export async function createApp({ db, config, helper }) {
             const input = credentials.parse(req.body);
             const ip = req.ip || 'local';
             const now = Date.now();
-            const attempt = db.prepare('SELECT * FROM attempts WHERE ip=?').get(ip);
-            if (attempt && attempt.until > now && attempt.count >= 5)
+            // Reserve the attempt atomically before asynchronous password work.
+            // Concurrent requests must not all read and overwrite the same count.
+            const attempt = db
+                .prepare(
+                    `
+                INSERT INTO attempts(ip,count,until) VALUES(?,1,?)
+                ON CONFLICT(ip) DO UPDATE SET
+                    count=CASE WHEN attempts.until>? THEN attempts.count+1 ELSE 1 END,
+                    until=excluded.until
+                WHERE attempts.until<=? OR attempts.count<5
+                RETURNING count
+            `
+                )
+                .get(ip, now + 15 * 60e3, now, now);
+            if (!attempt)
                 return res.status(429).json({ error: 'יותר מדי ניסיונות. נסו שוב בעוד 15 דקות.' });
             const user = db.prepare('SELECT * FROM users WHERE username=?').get(input.username);
             const valid = await argon2.verify(user?.password || dummy, input.password);
@@ -112,10 +135,6 @@ export async function createApp({ db, config, helper }) {
                 if (delta !== null) step = Math.floor(now / 30000) + delta;
             }
             if (!user || !valid || (user.totp && (step === null || step <= user.last_totp))) {
-                const count = attempt && attempt.until > now ? attempt.count + 1 : 1;
-                db.prepare(
-                    'INSERT INTO attempts(ip,count,until) VALUES(?,?,?) ON CONFLICT(ip) DO UPDATE SET count=excluded.count,until=excluded.until'
-                ).run(ip, count, now + 15 * 60e3);
                 audit(db, 'anonymous', 'login', 'authentication', 'denied');
                 return res.status(401).json({ error: 'פרטי ההתחברות או קוד האימות אינם תקינים' });
             }
@@ -148,6 +167,10 @@ export async function createApp({ db, config, helper }) {
         if (!['GET', 'HEAD'].includes(req.method) && !equal(req.headers['x-csrf-token'], s.csrf))
             return res.status(403).json({ error: 'אסימון אבטחה אינו תקין' });
         next();
+    });
+    app.use((req, res, next) => {
+        if (!envImportPath.test(req.path)) return next();
+        return req.is('text/plain') ? envText(req, res, next) : envJson(req, res, next);
     });
     app.post('/api/activity', (req, res) => {
         db.prepare('UPDATE sessions SET touched=? WHERE hash=?').run(Date.now(), req.session.hash);
@@ -229,11 +252,15 @@ export async function createApp({ db, config, helper }) {
         const resource = req.params.id.startsWith('uc:')
             ? 'project:' + req.params.id.slice(3)
             : 'service:' + req.params.id;
-        const id = queue.add(resource, async (stage) => {
-            stage('מעדכן שירות');
-            await helper('service', { service: req.params.id, operation, confirmed: true });
-            audit(db, req.session.username, 'service-' + operation, req.params.id);
-        });
+        const id = queue.add(
+            resource,
+            async (stage) => {
+                stage('מעדכן שירות');
+                await helper('service', { service: req.params.id, operation, confirmed: true });
+                audit(db, req.session.username, 'service-' + operation, req.params.id);
+            },
+            'service-' + operation
+        );
         res.status(202).json({ job: id });
     });
     app.get('/api/logs/:id', async (req, res) =>
@@ -410,10 +437,11 @@ export async function createApp({ db, config, helper }) {
         helper,
         queue,
         sessionUser,
+        networkStatus,
         origin: config.origin,
         origins: () => config.origins || [config.origin],
     });
-    registerNetwork({ app, db, helper, queue, sessionUser, config });
+    registerNetwork({ app, db, helper, queue, sessionUser, config, networkStatus });
     app.get('/api/projects/:project/qr', async (req, res) =>
         res.json(await helper('project-qr', { project: req.project.id }))
     );

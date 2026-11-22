@@ -425,7 +425,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
     const archived = { ...projects[0], id: 'archived', name: 'archived', lifecycle: 'archived' };
     let known = true,
         accessFailure = false;
-    let publicationAttempted = false;
+    let publicationAttempted = false,
+        projectReads = 0,
+        accessReads = 0;
     let publicationRequest: Record<string, any> = {};
     const publicationDiagnostic = {
         code: 'NGINX_BIND_PERMISSION',
@@ -459,7 +461,10 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await page.route('**/api/projects?state=archived', (route) =>
         route.fulfill({ json: [archived] })
     );
-    await page.route('**/api/projects', (route) => route.fulfill({ json: projects }));
+    await page.route('**/api/projects', (route) => {
+        projectReads++;
+        return route.fulfill({ json: projects });
+    });
     await page.route('**/api/inventory', (route) =>
         route.fulfill({
             json: {
@@ -506,8 +511,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
             },
         })
     );
-    await page.route('**/api/project-access', (route) =>
-        accessFailure
+    await page.route('**/api/project-access*', (route) => {
+        accessReads++;
+        return accessFailure
             ? route.fulfill({ status: 503, json: { error: 'unavailable' } })
             : route.fulfill({
                   json: {
@@ -516,8 +522,8 @@ test('compact project cards expose primary actions, safe links, truthful publica
                       publicationStatusKnown: known,
                       publications: known ? { running: { url: 'https://app.example.test/' } } : {},
                   },
-              })
-    );
+              });
+    });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(base);
     await page.locator('input[name=username]').fill('test-admin');
@@ -645,6 +651,21 @@ test('compact project cards expose primary actions, safe links, truthful publica
     accessFailure = true;
     await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
     await expect(card.getByText('אין כרגע כתובת גישה', { exact: true })).toBeVisible();
+    await page.clock.install();
+    const beforeHidden = { projects: projectReads, access: accessReads };
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.fastForward(45000);
+    expect(projectReads).toBe(beforeHidden.projects);
+    expect(accessReads).toBe(beforeHidden.access);
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(() => projectReads).toBeGreaterThan(beforeHidden.projects);
+    await expect.poll(() => accessReads).toBeGreaterThan(beforeHidden.access);
     await page.setViewportSize({ width: 390, height: 844 });
     const mobile = await cards.evaluateAll((elements) =>
         elements.slice(0, 2).map((element) => element.getBoundingClientRect().x)
@@ -665,8 +686,13 @@ test('project runtime, private environment metadata, console and archive restora
     page,
 }) => {
     const errors: string[] = [];
+    const importTypes: string[] = [];
+    page.on('request', (request) => {
+        if (request.url().endsWith('/env/import'))
+            importTypes.push(request.headers()['content-type']);
+    });
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.route('**/api/project-access', (route) =>
+    await page.route('**/api/project-access*', (route) =>
         route.fulfill({
             json: {
                 addresses: [{ address: '192.0.2.20', interface: 'tailscale0' }],
@@ -789,6 +815,7 @@ test('project runtime, private environment metadata, console and archive restora
     await dialog.getByRole('button', { name: 'שמירת משתני סביבה' }).click();
     await expect(dialog.getByLabel('ערך EMPTY')).toHaveValue('');
     expect(environments.get('lifecycle-demo')?.API_KEY).toBe('uploaded-private-value');
+    expect(importTypes).toEqual(['text/plain;charset=UTF-8']);
     await dialog.getByRole('button', { name: 'סגירה', exact: true }).click();
     await expandDetails(card.locator('.project-manage'));
     await card.getByRole('button', { name: 'קונסול הפרויקט', exact: true }).click();

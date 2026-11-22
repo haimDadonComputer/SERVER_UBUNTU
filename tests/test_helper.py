@@ -4,6 +4,14 @@ spec=importlib.util.spec_from_file_location('helper',pathlib.Path(__file__).reso
 h=importlib.util.module_from_spec(spec);spec.loader.exec_module(h)
 
 class HelperTests(unittest.TestCase):
+    def test_escaped_env_wire_limit_is_scoped_to_env_import(self):
+        text='\n'.join('K'+str(index)+'='+'\x01'*8192 for index in range(100))
+        self.assertEqual(len(h.parse_import(text)),100)
+        wire=json.dumps({'action':'project-env-import','args':{'project':'demo','text':text}}).encode()
+        self.assertGreater(len(wire),2200000)
+        self.assertEqual(h.decode_request(wire)['args']['text'],text)
+        with self.assertRaises(ValueError):h.decode_request(wire.replace(b'project-env-import',b'project-env-patch'))
+        with self.assertRaises(ValueError):h.decode_request(b' '* (7*1024*1024+1))
     def test_ss_ipv4_ipv6_udp(self):
         rows=h.parse_ss('tcp LISTEN 0 128 127.0.0.1:3080 0.0.0.0:* users:(("node",pid=42,fd=5))\nudp UNCONN 0 0 [::]:53 [::]:*\ntcp LISTEN 0 128 [::1]:6379 [::]:*')
         self.assertEqual(len(rows),3);self.assertEqual(rows[0]['pid'],42)

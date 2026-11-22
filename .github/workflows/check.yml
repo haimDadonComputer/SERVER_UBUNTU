@@ -12,6 +12,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check:helper
+      - name: Root-owned projection crash recovery with isolated temporary state
+        working-directory: tests
+        run: sudo env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest test_storage.StorageProjectionTests
       - run: npm run build
       - run: for script in scripts/*.sh tests/install-permissions.sh; do bash -n "$script"; done
       - run: sudo env "PATH=$PATH" bash tests/install-permissions.sh

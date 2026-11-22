@@ -50,10 +50,11 @@ export function registerLifecycle({
     helper,
     queue,
     sessionUser,
+    networkStatus,
     origin,
     origins = () => [origin],
 }) {
-    app.get('/api/project-access', async (_req, res) => {
+    app.get('/api/project-access', async (req, res) => {
         const addresses = Object.entries(networkInterfaces()).flatMap(([name, items]) =>
             (items || [])
                 .filter((i) => !i.internal && i.family === 'IPv4')
@@ -66,7 +67,7 @@ export function registerLifecycle({
                     Number(a.interface.startsWith('tailscale'))
             );
         let publicationStatusKnown = true;
-        const network = await helper('network-status').catch(() => {
+        const network = await networkStatus.get({ fresh: req.query.refresh === '1' }).catch(() => {
             publicationStatusKnown = false;
             return {};
         });
@@ -102,7 +103,13 @@ export function registerLifecycle({
             'project:' + id,
             async (stage) => {
                 stage(action);
-                const record = await helper(action, { project: id, ...args }, stage);
+                let record;
+                networkStatus.invalidate();
+                try {
+                    record = await helper(action, { project: id, ...args }, stage);
+                } finally {
+                    networkStatus.invalidate();
+                }
                 if (action === 'project-purge')
                     db.prepare('DELETE FROM projects WHERE id=?').run(id);
                 else save(record);
@@ -208,7 +215,17 @@ export function registerLifecycle({
         await sessionUser(req);
         if (queue.locks.has('project:' + req.project.id))
             return res.status(409).json({ error: 'הפרויקט נמצא בפעולה אחרת' });
-        const input = z.object({ text: z.string().max(1048576) }).parse(req.body);
+        const input = z
+            .object({
+                text: z
+                    .string()
+                    .max(1048576)
+                    .refine(
+                        (value) => Buffer.byteLength(value, 'utf8') <= 1048576,
+                        'ENV exceeds 1 MiB'
+                    ),
+            })
+            .parse(typeof req.body === 'string' ? { text: req.body } : req.body);
         const result = await helper('project-env-import', {
             project: req.project.id,
             text: input.text,
@@ -217,7 +234,17 @@ export function registerLifecycle({
         res.json(result);
     });
     app.post('/api/projects/:project/env/import/preview', async (req, res) => {
-        const input = z.object({ text: z.string().max(1048576) }).parse(req.body);
+        const input = z
+            .object({
+                text: z
+                    .string()
+                    .max(1048576)
+                    .refine(
+                        (value) => Buffer.byteLength(value, 'utf8') <= 1048576,
+                        'ENV exceeds 1 MiB'
+                    ),
+            })
+            .parse(typeof req.body === 'string' ? { text: req.body } : req.body);
         res.json(
             await helper('project-env-preview', { project: req.project.id, text: input.text })
         );

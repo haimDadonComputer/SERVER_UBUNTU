@@ -77,9 +77,9 @@ export function NetworkSettings({
             clearInterval(timer);
         };
     }, [networkJob?.id]);
-    async function refresh() {
+    async function refresh(fresh = false) {
         try {
-            const data = await api('/network');
+            const data = await api('/network' + (fresh ? '?refresh=1' : ''));
             setState(data);
             setStatusError('');
             return data;
@@ -144,7 +144,7 @@ export function NetworkSettings({
                 <h2>{project ? 'פרסום הפרויקט באינטרנט' : 'כתובות שרת ופרסום ציבורי'}</h2>
                 <button
                     type="button"
-                    onClick={() => void refresh().catch((e) => setError(e.message))}
+                    onClick={() => void refresh(true).catch((e) => setError(e.message))}
                 >
                     רענון מצב
                 </button>

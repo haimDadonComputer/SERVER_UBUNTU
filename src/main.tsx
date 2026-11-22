@@ -46,10 +46,17 @@ import { ContentTabs, SummaryStrip } from './content';
 type Any = Record<string, any>;
 let csrf = '';
 async function api(url: string, method = 'GET', body?: unknown) {
+    const rawEnv =
+        method === 'POST' &&
+        /^\/projects\/[a-z][a-z0-9-]{1,40}\/env\/import(?:\/preview)?$/.test(url) &&
+        typeof (body as Any)?.text === 'string';
     const r = await fetch('/api' + url, {
         method,
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers: {
+            'Content-Type': rawEnv ? 'text/plain;charset=UTF-8' : 'application/json',
+            'X-CSRF-Token': csrf,
+        },
+        body: body === undefined ? undefined : rawEnv ? (body as Any).text : JSON.stringify(body),
     });
     const data = await r.json();
     if (!r.ok) {
@@ -232,7 +239,7 @@ function App() {
             setPending(false);
         }
     }
-    async function refresh() {
+    async function refresh(fresh = false) {
         const results = await Promise.allSettled([
             api('/metrics'),
             api('/inventory'),
@@ -240,7 +247,7 @@ function App() {
             api('/jobs'),
             api('/settings'),
             api('/projects?state=archived'),
-            api('/project-access'),
+            api('/project-access' + (fresh ? '?refresh=1' : '')),
         ]);
         if (results[0].status === 'fulfilled') setMetrics(results[0].value);
         if (results[1].status === 'fulfilled') setInv(results[1].value);
@@ -321,46 +328,66 @@ function App() {
             };
         }
         connect();
-        const interval = setInterval(() => {
-            if (!document.hidden && ws.current?.readyState !== WebSocket.OPEN) {
-                api('/inventory')
-                    .then(setInv)
-                    .catch((error) =>
-                        setInv({
-                            ports: [],
-                            services: [],
-                            error: error.message,
-                            details: error.details,
-                        })
+        let pollBusy = false,
+            lastSlowPoll = Date.now();
+        async function poll(force = false) {
+            if (stopped || document.hidden || pollBusy) return;
+            pollBusy = true;
+            const requests: Promise<unknown>[] = [];
+            try {
+                if (!document.hidden && ws.current?.readyState !== WebSocket.OPEN) {
+                    requests.push(
+                        api('/inventory')
+                            .then(setInv)
+                            .catch((error) =>
+                                setInv({
+                                    ports: [],
+                                    services: [],
+                                    error: error.message,
+                                    details: error.details,
+                                })
+                            )
                     );
+                }
+                if (ws.current?.readyState !== WebSocket.OPEN)
+                    requests.push(api('/jobs').then(setJobs));
+                requests.push(api('/projects').then(setProjects));
+                if (force || Date.now() - lastSlowPoll >= 30000) {
+                    lastSlowPoll = Date.now();
+                    requests.push(api('/projects?state=archived').then(setArchivedProjects));
+                    requests.push(
+                        api('/project-access')
+                            .then((data) => {
+                                setServerAddresses(data.addresses || []);
+                                setPublications(data.publications || {});
+                                setManagementHosts(
+                                    Array.isArray(data.managementHosts)
+                                        ? data.managementHosts
+                                        : null
+                                );
+                                setPublicationStatusKnown(data.publicationStatusKnown === true);
+                            })
+                            .catch(() => {
+                                setPublicationStatusKnown(false);
+                                setManagementHosts(null);
+                            })
+                    );
+                }
+                await Promise.allSettled(requests);
+            } finally {
+                pollBusy = false;
             }
-            api('/jobs')
-                .then(setJobs)
-                .catch(() => {});
-            api('/projects')
-                .then(setProjects)
-                .catch(() => {});
-            api('/projects?state=archived')
-                .then(setArchivedProjects)
-                .catch(() => {});
-            api('/project-access')
-                .then((data) => {
-                    setServerAddresses(data.addresses || []);
-                    setPublications(data.publications || {});
-                    setManagementHosts(
-                        Array.isArray(data.managementHosts) ? data.managementHosts : null
-                    );
-                    setPublicationStatusKnown(data.publicationStatusKnown === true);
-                })
-                .catch(() => {
-                    setPublicationStatusKnown(false);
-                    setManagementHosts(null);
-                });
-        }, 5000);
+        }
+        const visible = () => {
+            if (!document.hidden) void poll(true);
+        };
+        document.addEventListener('visibilitychange', visible);
+        const interval = setInterval(() => void poll(), 5000);
         return () => {
             stopped = true;
             clearTimeout(retry);
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', visible);
             ws.current?.close();
         };
     }, [user?.username]);
@@ -813,7 +840,7 @@ function App() {
                         <button
                             className="secondary"
                             disabled={pending}
-                            onClick={() => void run(refresh, 'הנתונים רועננו')}
+                            onClick={() => void run(() => refresh(true), 'הנתונים רועננו')}
                         >
                             <RefreshCw size={16} className={pending ? 'spin' : ''} />
                             רענון נתונים

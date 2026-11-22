@@ -1,5 +1,19 @@
 # Verification record — 2026-11-14
 
+## Six security/reliability/efficiency review fixes — 2026-11-22
+
+Login attempts are atomically reserved in SQLite before asynchronous password verification. A six-request concurrent burst can accept only five checks; expired windows reset and successful login retains its existing reset behavior. Initial login/TOTP and authenticated-session action policy are unchanged.
+
+Runtime projection version 3 builds under a unique root-owned staging directory, verifies code links/storage entry policy, writes a root-only completion marker, flushes directories and atomically renames to the final view. Reuse checks the marker identity/ownership and current link. Interrupted staging is never reused as final code; old views and root transaction journals remain intact. File contents and ownership/modes are flushed before publication. Two root-Linux regressions simulate abrupt preparation exit, verify clean retry and reject missing/wrong markers; CI runs StorageProjectionTests as root with isolated temporary state. These tests are skipped on Windows and do not prove actual reboot/systemd behavior.
+
+The browser sends ENV import/preview as bounded raw text to avoid JSON expansion through an existing proxy. Authenticated legacy JSON import has a separate 7MiB envelope limit, while raw UTF-8 text remains limited to 1MiB at API/helper boundaries. Large envelopes are allowed only for the two ENV helper actions; all other helper request limits remain. The management-only generated proxy gets a bounded 7m request allowance, without rewriting existing proxy files or publishing anything on upgrade. Regression inputs accepted by the helper (819,689 raw bytes) now pass JSON and raw HTTP import; oversized/multibyte inputs remain rejected without echoing values.
+
+Queue work is split into one heavy lane and at most two internal allowlisted stop/disable controls. Resource reservations, progress/error records, queue.tail drain behavior and root helper locks remain. A stop for another project completes while a gated build runs, a second build waits, duplicate resources are rejected and failed controls release reservations.
+
+Authenticated network status reads share an in-flight/5-second cache; explicit refresh bypasses it and mutations invalidate before/after execution. Older in-flight reads cannot restore stale state after mutation. Helper certificate dates are shared for 60 seconds, re-probed immediately when file identity changes, bounded to 128 entries, and report unavailable on failure with a short retry window. Browser polling stops when hidden, resumes on visibility, avoids overlaps, uses WebSocket job messages when connected and polls archive/access metadata every 30 seconds. Additive jobs(created)/jobs(resource) indexes preserve history and remove table scans/temporary sorts from the two reviewed queries, verified with EXPLAIN QUERY PLAN.
+
+Validation: npm test passed (33 tests), npm run check:helper passed (151 total: 134 passed, 17 platform skips), npm run build passed. Two focused Edge DOM scenarios passed, including hidden/resumed polling and raw ENV transport with existing lifecycle/environment/archive behavior. No screenshots, remote writes, firewall changes or real credentials. Ubuntu DynamicUser, Nginx and power-loss integration remain unverified locally.
+
 ## Session-only actions, visible environment values and relevant controls — 2026-11-22
 
 Per the explicit user request, action authorization now uses the existing authenticated session instead of requiring repeated password/TOTP. Login password/TOTP, expiry, CSRF, Origin validation, operation confirmations and resource locks remain. Account changes still require choosing a new password, and TOTP enrollment still validates its setup code. The old credential forms were removed from project environment/purge, publication, GitHub configuration/disconnection, backup and account/security action flows.

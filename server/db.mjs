@@ -38,6 +38,11 @@ export function openDatabase(dir) {
     if (!jobColumns.has('error_details')) db.exec('ALTER TABLE jobs ADD COLUMN error_details TEXT');
     if (!jobColumns.has('started')) db.exec('ALTER TABLE jobs ADD COLUMN started TEXT');
     if (!jobColumns.has('action')) db.exec('ALTER TABLE jobs ADD COLUMN action TEXT');
+    // Both queries scan these indexes backwards, including SQLite's implicit
+    // rowid tie-breaker. Existing history is preserved by this additive migration.
+    db.exec(
+        'CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created); CREATE INDEX IF NOT EXISTS jobs_resource ON jobs(resource)'
+    );
     db.exec(
         `CREATE TABLE IF NOT EXISTS job_events(id INTEGER PRIMARY KEY,job TEXT NOT NULL REFERENCES jobs(id),time TEXT NOT NULL,stage TEXT NOT NULL,text TEXT NOT NULL DEFAULT ''); CREATE INDEX IF NOT EXISTS job_events_job ON job_events(job,id)`
     );

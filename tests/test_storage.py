@@ -144,6 +144,34 @@ class StorageCopyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name=='posix' and getattr(os,'geteuid',lambda:1)()==0,'Full root-owned runtime projection requires a root Linux acceptance environment')
 class StorageProjectionTests(unittest.TestCase):
+    def fixture(self):
+        import grp
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup);base=pathlib.Path(temp.name)
+        root=base/'projects/demo';release=root/'.control-releases/1-aaaaaaaaaa';release.mkdir(parents=True)
+        (release/'index.mjs').write_text('complete code')
+        cfg={'state_dir':str(base/'state'),'storage_dir':str(base/'storage'),'runtime_code_dir':str(base/'code'),'project_group':grp.getgrgid(os.getgid()).gr_name}
+        manager=Storage(Lifecycle(cfg,{}),'demo')
+        return manager,{'root':str(root),'release':release.name,'runtime':{'kind':'node','mode':'entry','entry':'index.mjs','storageDirectories':[]}}
+    def test_abrupt_preparation_failure_never_publishes_or_reuses_partial_code(self):
+        manager,p=self.fixture()
+        def interrupt(source,target,**kwargs):
+            (target/'partial.mjs').write_text('incomplete');raise SystemExit('simulated abrupt helper exit')
+        with patch('project_storage.copy_tree',side_effect=interrupt):
+            with self.assertRaises(SystemExit):manager.prepare(p)
+        self.assertEqual(len(list(manager.code.glob('.prepare-*'))),1)
+        self.assertEqual(list(manager.code.glob(p['release']+'-*')),[])
+        result=manager.prepare(p);view=pathlib.Path(result['view'])
+        self.assertTrue((view/'.control-sealed.json').is_file())
+        self.assertEqual((view/'.control-releases'/p['release']/'index.mjs').read_text(),'complete code')
+        self.assertFalse((view/'.control-releases'/p['release']/'partial.mjs').exists())
+        with patch('project_storage.copy_tree',side_effect=AssertionError('sealed views must be reused')):
+            self.assertEqual(manager.prepare(p)['view'],result['view'])
+    def test_missing_or_invalid_completion_marker_is_not_trusted(self):
+        manager,p=self.fixture();result=manager.prepare(p);seal=pathlib.Path(result['view'])/'.control-sealed.json'
+        seal.unlink()
+        with self.assertRaisesRegex(ValueError,'Incomplete'):manager.prepare(p)
+        seal.write_text(json.dumps({'signature':'wrong','release':p['release']}));seal.chmod(0o600)
+        with self.assertRaisesRegex(ValueError,'Incomplete'):manager.prepare(p)
     def test_restart_new_release_and_rollback_reuse_data_and_hide_source_changes(self):
         import grp
         with tempfile.TemporaryDirectory() as base:

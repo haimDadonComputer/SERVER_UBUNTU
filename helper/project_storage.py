@@ -188,12 +188,12 @@ def copy_tree(source,target,*,code=False,skip=(),group=None,preserve_existing=Fa
                                     if not chunk:break
                                     remaining=memoryview(chunk)
                                     while remaining:remaining=remaining[os.write(b,remaining):]
-                                os.fsync(b)
                                 if code:
                                     os.fchmod(b,0o750 if info.st_mode&0o111 else 0o640)
                                     if group is not None:os.fchown(b,0,group)
                                 else:
                                     owner=os.fstat(dst);os.fchown(b,owner.st_uid,owner.st_gid)
+                                os.fsync(b)
                                 after=os.fstat(a)
                                 if (after.st_size,after.st_mtime_ns)!=(opened.st_size,opened.st_mtime_ns):raise ValueError('Source changed during preparation')
                                 # Publish complete files only, without replacing a concurrently
@@ -307,26 +307,31 @@ class Storage:
         os.chown(self.code,0,group);self.code.chmod(0o750)
         # Rebuild pre-fix views on explicit activation; their 0700 directories
         # were created under the helper's restrictive umask.
-        signature=hashlib.sha256(json.dumps({'projectionVersion':2,'paths':entries,'runtime':p['runtime']},sort_keys=True).encode()).hexdigest()[:20]
+        signature=hashlib.sha256(json.dumps({'projectionVersion':3,'paths':entries,'runtime':p['runtime']},sort_keys=True).encode()).hexdigest()[:20]
         view=self.code/(p['release']+'-'+signature)
-        if view.exists():
+        if view.exists() or view.is_symlink():
             if view.is_symlink() or view.stat().st_uid!=0 or view.stat().st_mode&0o022:raise ValueError('Unsafe existing runtime view')
+            seal=view/'.control-sealed.json'
+            info=seal.lstat() if seal.exists() else None
+            if not info or not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or info.st_nlink!=1 or info.st_mode&0o022 or json.loads(seal.read_text())!={'signature':signature,'release':p['release']}:raise ValueError('Incomplete or unsafe sealed runtime view')
+            if not (view/'current').is_symlink() or os.readlink(view/'current')!=str(pathlib.Path('.control-releases')/p['release']):raise ValueError('Invalid sealed runtime link')
             atomic_private(self.metadata,json.dumps(catalog))
             return {'version':1,'view':str(view),'directories':entries}
-        view.mkdir(mode=0o750);os.chown(view,0,group);view.chmod(0o750)
-        target=view/'.control-releases'/p['release'];target.mkdir(mode=0o750,parents=True)
-        os.chown(target.parent,0,group);os.chown(target,0,group);target.parent.chmod(0o750);target.chmod(0o750)
+        work=self.code/('.prepare-'+p['release']+'-'+uuid.uuid4().hex)
+        work.mkdir(mode=0o750);os.chown(work,0,group);work.chmod(0o750)
         try:
+            target=work/'.control-releases'/p['release'];target.mkdir(mode=0o750,parents=True)
+            os.chown(target.parent,0,group);os.chown(target,0,group);target.parent.chmod(0o750);target.chmod(0o750)
             copy_tree(release,target,code=True,skip=paths,group=group)
             for path in paths:
                 # Also map absolute project-relative paths, without granting source writes.
-                for destination in (target/path,view/path):
+                for destination in (target/path,work/path):
                     with directory(destination,True) as fd:os.fchown(fd,0,group);os.fchmod(fd,0o750)
                     for parent in destination.parents:
-                        if parent==view:break
+                        if parent==work:break
                         os.chown(parent,0,group);parent.chmod(0o750)
-            (view/'shared').mkdir(mode=0o750);os.chown(view/'shared',0,group);(view/'shared').chmod(0o750)
-            (view/'current').symlink_to(pathlib.Path('.control-releases')/p['release'])
+            (work/'shared').mkdir(mode=0o750);os.chown(work/'shared',0,group);(work/'shared').chmod(0o750)
+            (work/'current').symlink_to(pathlib.Path('.control-releases')/p['release'])
             # Verify preserved dependency symlinks only after copying the whole tree.
             for directory_path,dirs,files in os.walk(target,followlinks=False):
                 for name in (*dirs,*files):
@@ -334,10 +339,18 @@ class Storage:
                     if link.is_symlink() and not link.resolve().is_relative_to(target):raise ValueError('Code symlink escapes sealed release')
             entry=p['runtime'].get('entry','')
             if entry and any(covers(path,entry) for path in paths):raise ValueError('Application entry cannot be inside writable storage')
+            atomic_private(work/'.control-sealed.json',json.dumps({'signature':signature,'release':p['release']}))
+            # Flush directory entries before publishing the complete tree. A
+            # crash can leave staging behind, but never a reusable partial view.
+            for directory_path,dirs,files in os.walk(work,topdown=False,followlinks=False):
+                with directory(pathlib.Path(directory_path)) as fd:os.fsync(fd)
+            work.rename(view)
+            with directory(self.code) as fd:os.fsync(fd)
             atomic_private(self.metadata,json.dumps(catalog))
             return {'version':1,'view':str(view),'directories':entries}
         except Exception:
-            shutil.rmtree(view);raise
+            with contextlib.suppress(OSError):shutil.rmtree(work)
+            raise
     def purge(self):
         if not shutil.rmtree.avoids_symlink_attacks:raise ValueError('Safe storage removal requires Linux')
         catalog=self.catalog()

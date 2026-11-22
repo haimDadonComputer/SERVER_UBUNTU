@@ -58,6 +58,31 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual([line for line in settings if line.startswith('CapabilityBoundingSet=')],['CapabilityBoundingSet=CAP_NET_BIND_SERVICE'])
         self.assertNotIn('AmbientCapabilities=', '\n'.join(settings))
         self.assertIn('CapabilityBoundingSet=',(root/'deploy/ubuntu-control.service').read_text().splitlines())
+    def test_certificate_status_cache_is_shared_bounded_and_invalidated_by_file_change(self):
+        from publication import CERTIFICATE_CACHE
+        CERTIFICATE_CACHE.clear();path=self.base/'certificate.pem';path.write_text('first')
+        self.run.side_effect=None;self.run.return_value='notAfter=first'
+        with patch('publication.time.monotonic',return_value=0):
+            self.assertEqual(self.pub.certificate_validity(path),'notAfter=first')
+            other=Publication(self.cfg,self.backend)
+            self.assertEqual(other.certificate_validity(path),'notAfter=first');self.assertEqual(self.run.call_count,1)
+            path.write_text('different certificate');self.run.return_value='notAfter=second'
+            self.assertEqual(other.certificate_validity(path),'notAfter=second');self.assertEqual(self.run.call_count,2)
+        with patch('publication.time.monotonic',return_value=61):
+            self.run.side_effect=OSError('probe failed')
+            self.assertEqual(self.pub.certificate_validity(path),'unavailable')
+        with patch('publication.time.monotonic',return_value=67):
+            self.run.side_effect=None;self.run.return_value='notAfter=recovered'
+            self.assertEqual(self.pub.certificate_validity(path),'notAfter=recovered')
+        for index in range(130):
+            extra=self.base/('certificate-'+str(index)+'.pem');extra.write_text('test certificate')
+            self.pub.certificate_validity(extra)
+        self.assertEqual(len(CERTIFICATE_CACHE),128)
+        self.assertNotIn(str(path),CERTIFICATE_CACHE)
+    def test_only_management_proxy_has_the_bounded_env_transport_allowance(self):
+        data=self.pub.read()
+        self.assertIn('client_max_body_size 7m;',self.pub.proxy(data,443,3080,True,True))
+        self.assertNotIn('client_max_body_size',self.pub.proxy(data,4000,3000,False))
     def test_management_redirect_keeps_acme_path_and_requires_valid_tls(self):
         data=self.pub.read();data['management']=True
         challenge=self.pub.challenge(data)

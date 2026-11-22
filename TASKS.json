@@ -118,6 +118,12 @@
             "verification": "28 Node tests passed; Python helper checks ran 146 tests (131 passed, 15 platform skips); production build passed. Two focused Edge DOM scenarios passed, including visible persisted values, no repeated password fields, inactive controls, completion-state refresh and short-domain expansion. Ubuntu integration remains unverified."
         },
         {
+            "id": "security-and-efficiency-review-fixes",
+            "status": "implemented",
+            "description": "Atomic login attempt reservation; staged and sealed version-3 runtime projections; bounded raw/legacy JSON ENV transport; one heavy job plus two independent stop/disable controls; shared status/certificate caching and visibility-scoped non-overlapping polling; additive job query indexes",
+            "verification": "33 Node tests passed; helper checks ran 151 tests (134 passed, 17 platform skips); production build and two focused Edge DOM scenarios passed. Root-owned projection crash/reuse regressions were added to an isolated Ubuntu CI step, not executed on this Windows host. Real Ubuntu/systemd integration remains unverified."
+        },
+        {
             "id": "ubuntu-live-validation",
             "status": "pending",
             "reason": "No Ubuntu server connection provided"

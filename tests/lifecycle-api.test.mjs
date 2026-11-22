@@ -101,7 +101,12 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
                 'X-CSRF-Token': csrf,
                 ...headers,
             },
-            body: body === undefined ? undefined : JSON.stringify(body),
+            body:
+                body === undefined
+                    ? undefined
+                    : typeof body === 'string'
+                      ? body
+                      : JSON.stringify(body),
         });
     assert.equal((await request('/projects/demo/env')).status, 401);
     assert.equal((await request('/project-access')).status, 401);
@@ -136,7 +141,7 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
     assert.ok(access.managementHosts.includes('lifecycle-test'));
     assert.ok(access.managementHosts.includes('control.example.com'));
     networkUnavailable = true;
-    const unavailable = await (await request('/project-access')).json();
+    const unavailable = await (await request('/project-access?refresh=1')).json();
     assert.equal(unavailable.publicationStatusKnown, false);
     assert.ok(unavailable.managementHosts.includes('lifecycle-test'));
     assert.deepEqual(unavailable.publications, {});
@@ -165,6 +170,39 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
     });
     assert.equal(response.status, 200);
     assert.ok(!(await response.text()).includes('private-value'));
+    const escapedEnv = Array.from(
+        { length: 100 },
+        (_, index) => 'K' + index + '=' + '\\'.repeat(8192)
+    ).join('\n');
+    for (const [body, headers] of [
+        [{ text: escapedEnv }, {}],
+        [escapedEnv, { 'Content-Type': 'text/plain;charset=UTF-8' }],
+    ]) {
+        const imported = await request('/projects/demo/env/import', 'POST', body, headers);
+        assert.equal(imported.status, 200);
+        assert.ok(!(await imported.text()).includes(escapedEnv));
+    }
+    assert.equal(
+        (
+            await request('/projects/demo/env/import/preview', 'POST', escapedEnv, {
+                'Content-Type': 'text/plain;charset=UTF-8',
+            })
+        ).status,
+        200
+    );
+    assert.equal(
+        (
+            await request('/projects/demo/env/import', 'POST', 'A=' + 'x'.repeat(1048576), {
+                'Content-Type': 'text/plain;charset=UTF-8',
+            })
+        ).status,
+        413
+    );
+    const unicodeTooLarge = 'A=' + '\u05d0'.repeat(600000);
+    assert.equal(
+        (await request('/projects/demo/env/import', 'POST', { text: unicodeTooLarge })).status,
+        400
+    );
     assert.equal(
         (
             await request('/network', 'PATCH', {

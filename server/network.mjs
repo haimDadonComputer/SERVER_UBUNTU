@@ -5,12 +5,14 @@ export function applyNetworkOrigins(config, state) {
     config.origins = [config.origin, ...(config.extraOrigins || [])];
     if (state.management && state.domain) config.origins.push('https://' + state.domain);
 }
-export function registerNetwork({ app, db, helper, queue, sessionUser, config }) {
+export function registerNetwork({ app, db, helper, queue, sessionUser, config, networkStatus }) {
     const save = (state) => {
         applyNetworkOrigins(config, state);
         return state;
     };
-    app.get('/api/network', async (_req, res) => res.json(save(await helper('network-status'))));
+    app.get('/api/network', async (req, res) =>
+        res.json(save(await networkStatus.get({ fresh: req.query.refresh === '1' })))
+    );
     app.patch('/api/network', async (req, res) => {
         await sessionUser(req);
         const input = z
@@ -20,7 +22,13 @@ export function registerNetwork({ app, db, helper, queue, sessionUser, config })
                 email: z.string().max(254),
             })
             .parse(req.body);
-        const state = save(await helper('network-settings', input));
+        let state;
+        networkStatus.invalidate();
+        try {
+            state = save(await helper('network-settings', input));
+        } finally {
+            networkStatus.invalidate();
+        }
         audit(db, req.session.username, 'network-settings', 'server');
         res.json(state);
     });
@@ -30,7 +38,13 @@ export function registerNetwork({ app, db, helper, queue, sessionUser, config })
             resource,
             async (stage) => {
                 stage(action);
-                const state = await helper(action, args, stage);
+                let state;
+                networkStatus.invalidate();
+                try {
+                    state = await helper(action, args, stage);
+                } finally {
+                    networkStatus.invalidate();
+                }
                 if (action !== 'network-certificate-test') save(state);
                 audit(db, username, action, resource);
             },

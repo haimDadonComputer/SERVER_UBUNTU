@@ -16,6 +16,13 @@ LOCK = threading.RLock()
 FIREWALL_WORK=threading.Event()
 ENV = {'PATH': '/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'SYSTEMD_COLORS': '0'}
 
+def decode_request(data):
+    if len(data)>7*1024*1024:raise ValueError('Request too large')
+    request=json.loads(data.split(b'\n')[0])
+    if not isinstance(request,dict) or not isinstance(request.get('action'),str) or len(request['action'])>80 or not isinstance(request.get('args',{}),dict):raise ValueError('Invalid helper request')
+    if len(data)>2200000 and request['action'] not in ('project-env-import','project-env-preview'):raise ValueError('Request too large')
+    return request
+
 def run(argv, timeout=20, check=True, input_text=None):
     secrets=[]
     if input_text:
@@ -588,9 +595,8 @@ def serve():
                     chunk=conn.recv(65536)
                     if not chunk: raise ValueError('Incomplete request')
                     data+=chunk
-                    if len(data)>2200000: raise ValueError('Request too large')
-                request=json.loads(data.split(b'\n')[0])
-                if not isinstance(request,dict) or not isinstance(request.get('action'),str) or len(request['action'])>80 or not isinstance(request.get('args',{}),dict):raise ValueError('Invalid helper request')
+                    if len(data)>7*1024*1024: raise ValueError('Request too large')
+                request=decode_request(data)
                 action=request['action'];args=request.get('args',{})
                 send_lock=threading.Lock()
                 def progress(event):

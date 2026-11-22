@@ -209,4 +209,18 @@ test('five bad attempts produce a persistent login lockout', async (t) => {
         assert.equal(r.status, i < 5 ? 401 : 429);
     }
     assert.equal(db.prepare('SELECT count FROM attempts').get().count, 5);
+    // An expired window resets, but a concurrent burst can still reserve only five slots.
+    db.prepare('UPDATE attempts SET until=?').run(Date.now() - 1);
+    const burst = await Promise.all(
+        Array.from({ length: 6 }, () =>
+            fetch('http://127.0.0.1:' + server.address().port + '/api/login', {
+                method: 'POST',
+                headers: { Origin: 'http://local', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: 'unknown', password: 'wrong' }),
+            })
+        )
+    );
+    assert.equal(burst.filter((response) => response.status === 401).length, 5);
+    assert.equal(burst.filter((response) => response.status === 429).length, 1);
+    assert.equal(db.prepare('SELECT count FROM attempts').get().count, 5);
 });

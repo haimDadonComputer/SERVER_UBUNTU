@@ -11,6 +11,7 @@ import threading
 import http.client
 import ssl
 import time
+import collections
 from project_secrets import atomic_private
 from project_lifecycle import Lifecycle, project_lock, BUILD_LOCK, REGISTRY_LOCK, PROJECT_LOCKS
 from project_storage import Storage
@@ -18,6 +19,8 @@ from job_progress import emit
 from diagnostics import OperationError,exception_details
 
 NETWORK_LOCK=threading.RLock()
+CERTIFICATE_CACHE=collections.OrderedDict()
+CERTIFICATE_CACHE_LOCK=threading.Lock()
 DEFAULT={'ip':'','domain':'','email':'','management':False,'projects':{},'certificates':{},'firewallOwned':[],'projectDomainSuffix':'haimdadon.co.il'}
 
 def valid_domain(value):
@@ -45,6 +48,20 @@ class Publication:
         if not self.directory.is_dir() or self.directory.is_symlink() or not (self.acme/'prepared').is_file():
             raise ValueError('HTTPS preparation is incomplete. Run scripts/upgrade.sh from the source checkout; it prepares Nginx and Certbot automatically')
         self.h['run'](['/usr/sbin/nginx','-t'])
+    def certificate_validity(self,path):
+        # File identity changes on renewal invalidate immediately. Share probes
+        # across status readers, bound entries, and never serve stale success on failure.
+        info=path.stat();key=str(path);fingerprint=(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
+        with CERTIFICATE_CACHE_LOCK:
+            now=time.monotonic();cached=CERTIFICATE_CACHE.get(key)
+            if cached and cached['fingerprint']==fingerprint and now-cached['time']<cached['ttl']:
+                CERTIFICATE_CACHE.move_to_end(key);return cached['value']
+            try:value=self.h['run'](['/usr/bin/openssl','x509','-in',str(path),'-noout','-dates']).strip();ttl=60
+            except Exception:value='unavailable';ttl=5
+            CERTIFICATE_CACHE[key]={'fingerprint':fingerprint,'time':time.monotonic(),'ttl':ttl,'value':value}
+            CERTIFICATE_CACHE.move_to_end(key)
+            while len(CERTIFICATE_CACHE)>128:CERTIFICATE_CACHE.popitem(last=False)
+            return value
     def status(self):
         data=self.read()
         data['prepared']=(self.acme/'prepared').is_file()
@@ -59,7 +76,7 @@ class Publication:
         for kind,cert in data['certificates'].items():
             path=self.acme/'certbot/live'/kind/'cert.pem'
             if path.is_file():
-                try:cert['validity']=self.h['run'](['/usr/bin/openssl','x509','-in',str(path),'-noout','-dates']).strip()
+                try:cert['validity']=self.certificate_validity(path)
                 except Exception:cert['validity']='unavailable'
         try:data['renewal']=self.h['run'](['/usr/bin/systemctl','show','ubuntu-control-cert-renew.service','-p','Result','-p','ExecMainExitTimestamp'],check=False).strip()
         except Exception as error:
@@ -213,6 +230,7 @@ class Publication:
     def proxy(self,data,port,upstream,tls,management=False,storage=(),domain='',certificate_kind=None):
         name=data['domain'] if management else domain or data['ip']
         lines=['server {',' listen '+data['ip']+':'+str(port)+(' ssl' if tls else '')+';',' server_name '+name+';']
+        if management:lines+=[' client_max_body_size 7m;']
         if tls:
             cert=self.cert_path(certificate_kind or ('management' if management else 'ip'))
             lines+=[' ssl_certificate '+str(cert/'fullchain.pem')+';',' ssl_certificate_key '+str(cert/'privkey.pem')+';',' ssl_protocols TLSv1.2 TLSv1.3;']

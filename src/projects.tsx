@@ -344,6 +344,27 @@ export function ProjectActions({
                                     משתני סביבה
                                 </button>
                             )}
+                            <button
+                                className="secondary"
+                                disabled={busy || !p.repo}
+                                title={
+                                    !p.repo
+                                        ? 'לא הוגדר מאגר GitHub לפרויקט'
+                                        : 'משיכת קוד בלבד, ללא התקנה או פריסה'
+                                }
+                                onClick={() => setModal('pull')}
+                            >
+                                <RefreshCw size={14} />
+                                {progress('pull', 'סנכרן עם הגיטהב')}
+                            </button>
+                            <button
+                                className="secondary"
+                                disabled={busy}
+                                onClick={() => setModal('command')}
+                            >
+                                <Terminal size={14} />
+                                {progress('command', 'הרץ פקודה')}
+                            </button>
                         </div>
                         <details className="project-manage">
                             <summary>עוד</summary>
@@ -486,6 +507,19 @@ export function ProjectActions({
                     }}
                 />
             )}
+            {modal === 'command' && (
+                <ProjectCommand
+                    p={p}
+                    api={api}
+                    busy={busy}
+                    processRunning={processRunning}
+                    close={() => setModal('')}
+                    configure={() => setModal('runtime')}
+                    run={(script) => action('command', 'POST', { confirmed: true, script })}
+                    error={error}
+                    details={details}
+                />
+            )}
             {modal === 'link' && (
                 <Popup title="כתובת פתיחת הפרויקט" onClose={() => setModal('')}>
                     <p className="muted">
@@ -542,7 +576,7 @@ export function ProjectActions({
                     </form>
                 </Popup>
             )}
-            {modal && modal !== 'runtime' && modal !== 'link' && modal !== 'publication' && (
+            {modal && !['runtime', 'link', 'publication', 'command'].includes(modal) && (
                 <Popup
                     title={
                         {
@@ -550,6 +584,7 @@ export function ProjectActions({
                             stop: 'עצירת פרויקט',
                             restart: 'הפעלה מחדש',
                             activate: 'עדכון ופריסה',
+                            pull: 'סנכרן עם הגיטהב',
                             archive: 'ארכוב פרויקט',
                             restore: 'שחזור פרויקט',
                             purge: 'מחיקה לצמיתות',
@@ -558,15 +593,17 @@ export function ProjectActions({
                     onClose={() => setModal('')}
                 >
                     <p className="muted">
-                        {modal === 'archive'
-                            ? 'השירות ייעצר והעדכונים יושהו. הקוד, ההגדרות והנתונים יישמרו לשחזור.'
-                            : modal === 'purge'
-                              ? 'כל משאבי הפרויקט שבארכיון יימחקו. היסטוריית הפעולות תישמר. אין אפשרות לבטל.'
-                              : modal === 'restore'
-                                ? 'הפרויקט יחזור עם הנתונים ומשתני הסביבה, במצב כבוי ובעדכון ידני.'
-                                : modal === 'activate'
-                                  ? 'תיבנה גרסה חדשה. שירות שכבר פועל יופעל מחדש וייבדק; פרויקט כבוי יישאר כבוי.'
-                                  : 'הפעולה תריץ או תעצור את קוד הפרויקט כמשתמש מוגבל. הפעלה ראשונה כוללת התקנת תלויות ובנייה.'}
+                        {modal === 'pull'
+                            ? 'השינויים יימשכו מהענף שהוגדר ב־GitHub אל תיקיית המקור בשרת, ללא התקנת תלויות, בנייה או הפעלה מחדש. הגרסה הפעילה לא תשתנה. שינויים מקומיים או היסטוריה שהתפצלה יחסמו את המשיכה; לא תתבצע העלאה ל־GitHub.'
+                            : modal === 'archive'
+                              ? 'השירות ייעצר והעדכונים יושהו. הקוד, ההגדרות והנתונים יישמרו לשחזור.'
+                              : modal === 'purge'
+                                ? 'כל משאבי הפרויקט שבארכיון יימחקו. היסטוריית הפעולות תישמר. אין אפשרות לבטל.'
+                                : modal === 'restore'
+                                  ? 'הפרויקט יחזור עם הנתונים ומשתני הסביבה, במצב כבוי ובעדכון ידני.'
+                                  : modal === 'activate'
+                                    ? 'תיבנה גרסה חדשה. שירות שכבר פועל יופעל מחדש וייבדק; פרויקט כבוי יישאר כבוי.'
+                                    : 'הפעולה תריץ או תעצור את קוד הפרויקט כמשתמש מוגבל. הפעלה ראשונה כוללת התקנת תלויות ובנייה.'}
                     </p>
                     {['archive', 'purge'].includes(modal) && (
                         <div className="project-update-status">
@@ -646,6 +683,127 @@ export function ProjectActions({
                 </Popup>
             )}
         </>
+    );
+}
+
+function ProjectCommand({
+    p,
+    api,
+    busy,
+    processRunning,
+    close,
+    configure,
+    run,
+    error,
+    details,
+}: {
+    p: Data;
+    api: Api;
+    busy: boolean;
+    processRunning: boolean;
+    close: () => void;
+    configure: () => void;
+    run: (script: string) => Promise<void>;
+    error: string;
+    details: Data | null;
+}) {
+    const [scripts, setScripts] = useState<string[] | null>(null);
+    const [script, setScript] = useState(p.runtime?.script || '');
+    const [loadError, setLoadError] = useState('');
+    const supported = p.ownership === 'managed' && p.runtime?.kind === 'node';
+    useEffect(() => {
+        if (!supported) return;
+        let cancelled = false;
+        api(`/projects/${p.id}/options`)
+            .then((options) => {
+                if (cancelled) return;
+                setScripts(options.scripts);
+                setScript((previous: string) =>
+                    options.scripts.includes(previous)
+                        ? previous
+                        : options.scripts.includes('start')
+                          ? 'start'
+                          : options.scripts[0] || ''
+                );
+            })
+            .catch((e) => {
+                if (!cancelled) setLoadError(e.message);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [p.id, supported]);
+    const changed = p.runtime?.mode !== 'npm' || p.runtime?.script !== script;
+    return (
+        <Popup title="הרץ פקודה" onClose={close}>
+            {!supported ? (
+                <>
+                    <p>לבחירת פקודת npm יש להגדיר סביבת הפעלה מנוהלת מסוג Node.js.</p>
+                    <button className="primary" onClick={configure}>
+                        הגדרות הפעלה
+                    </button>
+                </>
+            ) : (
+                <form
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        if (script) void run(script);
+                    }}
+                >
+                    <p className="muted">
+                        בחרו פקודת הפעלה מתוך package.json. היא תישמר כפקודת ההפעלה של הפרויקט ותרוץ
+                        כשירות מנוהל.
+                    </p>
+                    <label>
+                        פקודה
+                        <select
+                            dir="ltr"
+                            value={script}
+                            disabled={busy || !scripts?.length}
+                            onChange={(e) => setScript(e.target.value)}
+                        >
+                            {!scripts?.length && (
+                                <option value="">
+                                    {scripts ? 'לא נמצאו פקודות npm' : 'טוען פקודות…'}
+                                </option>
+                            )}
+                            {scripts?.map((name) => (
+                                <option key={name} value={name}>
+                                    {name === 'start' ? 'npm start' : `npm run ${name}`}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    {!!p.runtime.args?.length && (
+                        <p dir="ltr">args: {JSON.stringify(p.runtime.args)}</p>
+                    )}
+                    <p className="muted">
+                        {changed || !p.preparedCommit || p.runtimePending
+                            ? 'הבחירה דורשת הכנת גרסה, כולל התקנת תלויות ובנייה לפי ההגדרות, ולאחר מכן הפעלה ובדיקת תקינות.'
+                            : 'תופעל הגרסה המוכנה, ללא משיכת קוד או התקנה מחדש. כדי להפעיל קוד חדש השתמשו בעדכון ופריסה.'}
+                    </p>
+                    {processRunning && (
+                        <p className="alert warning">
+                            {changed
+                                ? 'יש לעצור את הפרויקט לפני שינוי פקודת ההפעלה.'
+                                : 'הפרויקט פועל; הרצת הפקודה תפעיל אותו מחדש.'}
+                        </p>
+                    )}
+                    {(error || loadError) && (
+                        <div className="alert error" role="alert">
+                            {error || loadError}
+                            <ErrorDetails details={details} />
+                        </div>
+                    )}
+                    <button
+                        className="primary"
+                        disabled={busy || !scripts?.includes(script) || (changed && processRunning)}
+                    >
+                        {busy && <Loader2 className="spin" size={14} />}הרצה
+                    </button>
+                </form>
+            )}
+        </Popup>
     );
 }
 

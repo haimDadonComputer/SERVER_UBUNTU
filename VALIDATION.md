@@ -1,5 +1,11 @@
 # Verification record — 2026-11-14
 
+## Project sync and managed command controls — 2026-11-22
+
+Project cards expose ten primary controls. GitHub sync uses the existing locked, fast-forward pull-only action, leaving installations and running releases unchanged. The command dialog selects an existing npm script as the managed Node startup command; the strict authenticated/CSRF API accepts only confirmed/script, never executable paths, shell strings, environment or stdin. Helper validation rejects missing scripts, archived/unmanaged projects and pending recovery; changing a script uses stopped-runtime configuration checks. An unchanged script reuses the prepared release and still performs health checks. Changed configuration may require installation/build; pulled source is not automatically activated. Runtime-pending metadata is public so the dialog can describe required preparation accurately.
+
+Validation: 33 Node tests passed; 153 helper tests ran (136 passed, 17 platform skips); production build passed. Focused Edge DOM cases passed for compact desktop/mobile cards and lifecycle/environment/console/archive behavior. New assertions cover sync/command payloads, available scripts, disabled command changes while running and staying on Projects. No screenshots or live server actions. Real Ubuntu/systemd integration remains unverified.
+
 ## Six security/reliability/efficiency review fixes — 2026-11-22
 
 Login attempts are atomically reserved in SQLite before asynchronous password verification. A six-request concurrent burst can accept only five checks; expired windows reset and successful login retains its existing reset behavior. Initial login/TOTP and authenticated-session action policy are unchanged.

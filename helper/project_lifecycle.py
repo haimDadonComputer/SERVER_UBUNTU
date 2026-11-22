@@ -98,7 +98,7 @@ class Lifecycle:
             registry=self.h['read_project_registry'](self.cfg);registry[identifier]=p;self.h['write_project_registry'](self.cfg,registry)
         return self.public(identifier,p)
     def public(self,identifier,p):
-        keys=('root','service','kind','repo','branch','auth','github_repository_id','health_port','runtime','ownership','lifecycle','desired','updates','remoteCommit','preparedCommit','activeCommit','failedCommit','checkedAt','deployedAt','deployment','archivedAt','writableDirectories')
+        keys=('root','service','kind','repo','branch','auth','github_repository_id','health_port','runtime','runtimePending','ownership','lifecycle','desired','updates','remoteCommit','preparedCommit','activeCommit','failedCommit','checkedAt','deployedAt','deployment','archivedAt','writableDirectories')
         pending=self.transaction_path(identifier).exists()
         if pending:
             try:pending=json.loads(self.transaction_path(identifier).read_text()).get('id')!=p.get('operationId')
@@ -428,6 +428,17 @@ class Lifecycle:
                 self.h['run'](['/usr/bin/systemctl','restart',self.names(identifier)['unit']]);self.health(identifier,old)
             self.save(identifier,old,True);self.finish(identifier)
             raise
+    def command(self,identifier,args):
+        p=self.lookup(identifier);runtime=p.get('runtime',{})
+        if args.get('confirmed') is not True:raise ValueError('Explicit confirmation required')
+        if p.get('ownership')!='managed' or runtime.get('kind')!='node':raise ValueError('Configure a managed Node runtime before running an npm command')
+        script=args.get('script')
+        if not isinstance(script,str) or not re.fullmatch(r'[A-Za-z0-9:_-]{1,80}',script) or script not in self.options(identifier)['scripts']:raise ValueError('Choose an existing package.json script')
+        if runtime.get('mode')!='npm' or runtime.get('script')!=script:
+            # Reuse configuration validation, including the stopped-service and
+            # publication checks. Commands never bypass lifecycle authority.
+            self.configure(identifier,{'runtime':{**runtime,'mode':'npm','script':script}})
+        return self.deploy(identifier,{},True)
     def control(self,identifier,operation):
         p=self.lookup(identifier)
         if operation in ('start','restart'):return self.deploy(identifier,{},True)
@@ -574,7 +585,7 @@ class Lifecycle:
         p.update(lifecycle='deleted',updates='manual',desired='stopped');p.pop('archive',None);result=self.save(identifier,p,True);self.finish(identifier);return result
 
 READ_ACTIONS={'project-options','project-env-meta','project-env-values','project-records','project-state','project-head'}
-MUTATIONS={'project-runtime','project-env-patch','project-updates','project-start','project-stop','project-restart','project-enable','project-disable','project-archive','project-restore','project-purge','project-activate'}
+MUTATIONS={'project-runtime','project-env-patch','project-updates','project-start','project-stop','project-restart','project-enable','project-disable','project-archive','project-restore','project-purge','project-activate','project-command'}
 
 def dispatch_lifecycle(cfg,action,args,backend):
     life=Lifecycle(cfg,backend)
@@ -597,6 +608,7 @@ def dispatch_lifecycle(cfg,action,args,backend):
         if action=='project-restore':return life.restore(identifier)
         if action=='project-purge':return life.purge(identifier,args)
         if action=='project-activate':return life.deploy(identifier,args)
+        if action=='project-command':return life.command(identifier,args)
         if action in ('project-start','project-stop','project-restart','project-enable','project-disable'):return life.control(identifier,action.removeprefix('project-'))
     raise ValueError('Unsupported lifecycle action')
 

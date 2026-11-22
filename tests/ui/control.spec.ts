@@ -405,7 +405,14 @@ test('desktop login, real API session, RTL navigation, honest system errors and 
 test('compact project cards expose primary actions, safe links, truthful publication and responsive layout', async ({
     page,
 }) => {
-    const runtime = { kind: 'node', health: 'http', listenAddress: '0.0.0.0', port: 3000 };
+    const runtime = {
+        kind: 'node',
+        mode: 'npm',
+        script: 'start',
+        health: 'http',
+        listenAddress: '0.0.0.0',
+        port: 3000,
+    };
     const projects = ['running', 'stopped', 'failed', 'unknown', 'unconfigured'].map((id) => ({
         id,
         name: id,
@@ -544,7 +551,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
     ]) {
         await expect(card.getByRole('button', { name: label, exact: true })).toBeVisible();
     }
-    await expect(card.locator('.project-primary-actions > button')).toHaveCount(8);
+    await expect(card.locator('.project-primary-actions > button')).toHaveCount(10);
+    await expect(card.getByRole('button', { name: 'סנכרן עם הגיטהב', exact: true })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'הרץ פקודה', exact: true })).toBeVisible();
     await expect(card.locator('.project-manage')).not.toHaveAttribute('open');
     await expect(
         card.getByRole('button', { name: 'קונסול הפרויקט', exact: true })
@@ -618,6 +627,43 @@ test('compact project cards expose primary actions, safe links, truthful publica
     });
     await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
     await expect(card.locator('.project-job-status')).toHaveCount(0);
+    let pullBody: any, commandBody: any;
+    await page.route('**/api/projects/running/options', (route) =>
+        route.fulfill({ json: { scripts: ['start', 'dev'] } })
+    );
+    for (const operation of ['pull', 'command']) {
+        await page.route(`**/api/projects/running/${operation}`, (route) => {
+            if (operation === 'pull') pullBody = route.request().postDataJSON();
+            else commandBody = route.request().postDataJSON();
+            projectJobs.unshift({
+                id: operation + '-card',
+                resource: 'project:running',
+                action: 'project-' + operation,
+                status: 'done',
+                stage: 'done',
+            });
+            return route.fulfill({ status: 202, json: { job: operation + '-card' } });
+        });
+    }
+    await card.getByRole('button', { name: 'סנכרן עם הגיטהב', exact: true }).click();
+    let commandDialog = page.getByRole('dialog');
+    await expect(commandDialog).toContainText('ללא התקנת תלויות');
+    await commandDialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
+    await expect(commandDialog).not.toBeVisible();
+    expect(pullBody).toEqual({ confirmed: true });
+    await card.getByRole('button', { name: 'הרץ פקודה', exact: true }).click();
+    commandDialog = page.getByRole('dialog');
+    await expect(commandDialog.getByRole('combobox', { name: 'פקודה', exact: true })).toHaveValue(
+        'start'
+    );
+    await commandDialog.getByRole('combobox', { name: 'פקודה', exact: true }).selectOption('dev');
+    await expect(commandDialog.getByRole('button', { name: 'הרצה', exact: true })).toBeDisabled();
+    await commandDialog.getByRole('combobox', { name: 'פקודה', exact: true }).selectOption('start');
+    await commandDialog.getByRole('button', { name: 'הרצה', exact: true }).click();
+    await expect(commandDialog).not.toBeVisible();
+    expect(commandBody).toEqual({ confirmed: true, script: 'start' });
+    await expect(card).toBeVisible();
+    await expect(page.getByRole('button', { name: 'הוספת פרויקט', exact: true }).first()).toBeVisible();
     await expect(stopped.getByRole('button', { name: 'עצירה', exact: true })).toBeDisabled();
     await expect(stopped.getByRole('button', { name: 'הפעלה מחדש', exact: true })).toBeDisabled();
     await expect(

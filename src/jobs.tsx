@@ -10,6 +10,8 @@ export const stageLabel = (stage: string) =>
             'project-archive': 'מעביר לארכיון',
             'project-restore': 'משחזר מהארכיון',
             'project-activate': 'מעדכן ופורס',
+            'project-command': 'מריץ פקודת הפעלה',
+            'project-pull': 'מסנכרן קוד מ־GitHub',
             'network-project': 'מעדכן פרסום פרויקט',
             'network-management': 'מעדכן פרסום ניהול',
             'network-certificate-test': 'בודק תעודה ב־staging',

@@ -269,6 +269,16 @@ export function registerLifecycle({
             if (req.body.confirmed !== true) throw new Error('נדרש אישור מפורש');
             enqueue(req, res, 'project-' + operation);
         });
+    app.post('/api/projects/:project/command', async (req, res) => {
+        const input = z
+            .object({
+                confirmed: z.literal(true),
+                script: z.string().regex(/^[A-Za-z0-9:_-]{1,80}$/),
+            })
+            .strict()
+            .parse(req.body);
+        enqueue(req, res, 'project-command', input);
+    });
     app.post('/api/projects/:project/activate', async (req, res) => {
         const input = z
             .object({

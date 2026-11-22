@@ -25,6 +25,31 @@ class LifecycleTests(unittest.TestCase):
         self.runtime={'kind':'node','mode':'npm','script':'start','args':[],'health':'http','port':3000,'healthPath':'/','autostart':False}
     def managed(self):
         self.life.configure('demo',{'runtime':self.runtime});return self.registry['demo']
+    def test_command_reuses_managed_release_and_never_accepts_shell_input(self):
+        self.managed();self.registry['demo'].update(release='1-aaaaaaaaaa',preparedCommit='a'*40,runtimePending=False)
+        with patch.object(self.life,'release') as release,patch.object(self.life,'provision'),patch.object(self.life,'health') as health,patch.object(self.life,'configure') as configure:
+            result=self.life.command('demo',{'script':'start','confirmed':True})
+            self.assertEqual(result['desired'],'running');release.assert_not_called();configure.assert_not_called();health.assert_called_once()
+        for args in ({'script':'start'},{'script':'start; reboot','confirmed':True},{'script':'missing','confirmed':True},{'script':'/bin/sh','confirmed':True},{'script':['start'],'confirmed':True}):
+            with patch.object(self.life,'deploy') as deploy:
+                with self.assertRaises(ValueError):self.life.command('demo',args)
+                deploy.assert_not_called()
+        self.registry['demo']['lifecycle']='archived'
+        with self.assertRaises(ValueError):self.life.command('demo',{'script':'start','confirmed':True})
+    def test_command_change_uses_runtime_validation_and_requires_stopped_project(self):
+        self.managed();self.registry['demo'].update(release='1-aaaaaaaaaa')
+        with patch.object(self.life,'deploy',return_value={}) as deploy:
+            self.life.command('demo',{'script':'build','confirmed':True})
+            self.assertEqual(self.registry['demo']['runtime']['script'],'build')
+            self.assertTrue(self.life.public('demo',self.registry['demo'])['runtimePending']);deploy.assert_called_once()
+        self.run.return_value='ActiveState=active\nMainPID=1234\nNRestarts=0'
+        with patch.object(self.life,'deploy') as deploy:
+            with self.assertRaises(ValueError):self.life.command('demo',{'script':'start','confirmed':True})
+            deploy.assert_not_called();self.assertEqual(self.registry['demo']['runtime']['script'],'build')
+        with patch.object(Lifecycle,'command') as command:
+            self.life.begin('demo',self.registry['demo'],'deploy')
+            with self.assertRaises(OperationError):dispatch_lifecycle(self.cfg,'project-command',{'project':'demo','script':'build','confirmed':True},self.backend)
+            command.assert_not_called()
     def test_runtime_requires_typed_existing_entry_and_scripts(self):
         options={'scripts':['start'],'entries':['index.mjs'],'dockerfile':True}
         for update in ({'script':'start;sudo reboot'},{'args':'npm start'},{'args':['x\nreboot']},{'entry':'../../etc/shadow','mode':'entry'},{'healthPath':'//evil.test'},{'port':22}):

@@ -478,22 +478,28 @@ export async function createApp({ db, config, helper }) {
                           .parse(req.body.expected)
                     : undefined;
             const p = req.project;
-            const id = queue.add('project:' + p.id, async (stage) => {
-                stage(
-                    action === 'clone'
-                        ? 'מוריד מאגר'
-                        : action === 'pull'
-                          ? 'מושך קוד ללא פריסה'
-                          : 'בונה גרסה ובודק תקינות'
-                );
-                await helper(
-                    'project-' + action,
-                    { project: p.id, confirmed: true, expected },
-                    stage
-                );
-                db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(p.id);
-                audit(db, req.session.username, 'project-' + action, p.id);
-            });
+            const id = queue.add(
+                'project:' + p.id,
+                async (stage) => {
+                    stage(
+                        action === 'clone'
+                            ? 'מוריד מאגר'
+                            : action === 'pull'
+                              ? 'מושך קוד ללא פריסה'
+                              : 'בונה גרסה ובודק תקינות'
+                    );
+                    await helper(
+                        'project-' + action,
+                        { project: p.id, confirmed: true, expected },
+                        stage
+                    );
+                    db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(
+                        p.id
+                    );
+                    audit(db, req.session.username, 'project-' + action, p.id);
+                },
+                'project-' + action
+            );
             res.status(202).json({ job: id });
         });
     app.post('/api/projects/:project/env', async (req, res) => {

@@ -124,6 +124,12 @@
             "verification": "33 Node tests passed; helper checks ran 151 tests (134 passed, 17 platform skips); production build and two focused Edge DOM scenarios passed. Root-owned projection crash/reuse regressions were added to an isolated Ubuntu CI step, not executed on this Windows host. Real Ubuntu/systemd integration remains unverified."
         },
         {
+            "id": "project-sync-and-managed-command-buttons",
+            "status": "implemented",
+            "description": "Add visible GitHub pull-only and managed npm startup command controls; script-name-only authenticated/CSRF API, helper lifecycle validation/locks and release reuse, no arbitrary shell endpoint",
+            "verification": "33 Node tests passed, production build passed, helper suite ran 153 tests (136 passed, 17 platform skips). Focused Edge DOM scenarios cover ten card controls, pull/command payloads, runtime selection, running-service restrictions, unchanged tab and responsive layout. Real Ubuntu integration remains unverified."
+        },
+        {
             "id": "ubuntu-live-validation",
             "status": "pending",
             "reason": "No Ubuntu server connection provided"

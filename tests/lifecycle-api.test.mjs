@@ -112,9 +112,43 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
     assert.equal((await request('/project-access')).status, 401);
     assert.equal((await request('/projects/demo/env/reveal', 'POST', {})).status, 401);
     assert.equal((await request('/projects/demo/port-check?port=3000')).status, 401);
+    assert.equal(
+        (await request('/projects/demo/command', 'POST', { confirmed: true, script: 'start' }))
+            .status,
+        401
+    );
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
+    for (const headers of [{ 'X-CSRF-Token': 'bad' }, { Origin: 'https://other.example' }])
+        assert.equal(
+            (
+                await request(
+                    '/projects/demo/command',
+                    'POST',
+                    { confirmed: true, script: 'start' },
+                    headers
+                )
+            ).status,
+            403
+        );
+    for (const body of [
+        { script: 'start' },
+        { confirmed: true, script: 'start; reboot' },
+        { confirmed: true, script: 'start', command: '/bin/sh' },
+    ])
+        assert.equal((await request('/projects/demo/command', 'POST', body)).status, 400);
+    response = await request('/projects/demo/command', 'POST', {
+        confirmed: true,
+        script: 'start',
+    });
+    assert.equal(response.status, 202);
+    await queue.tail;
+    assert.deepEqual(calls.find(([action]) => action === 'project-command')[1], {
+        project: 'demo',
+        confirmed: true,
+        script: 'start',
+    });
     assert.equal(
         (await request('/projects/demo/env/reveal', 'POST', {}, { 'X-CSRF-Token': 'bad' })).status,
         403

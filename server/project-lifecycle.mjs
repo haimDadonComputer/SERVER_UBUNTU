@@ -112,7 +112,37 @@ export function registerLifecycle({
                 }
                 if (action === 'project-purge')
                     db.prepare('DELETE FROM projects WHERE id=?').run(id);
-                else save(record);
+                else {
+                    if (action === 'project-sync') {
+                        const sync = z
+                            .object({
+                                commit: z.string().regex(/^[a-f0-9]{40}$/),
+                                previousCommit: z
+                                    .string()
+                                    .regex(/^[a-f0-9]{40}$/)
+                                    .nullable(),
+                            })
+                            .parse(record.sync);
+                        db.prepare(
+                            'UPDATE projects SET source_sync_json=?,last_sync=CURRENT_TIMESTAMP WHERE id=?'
+                        ).run(
+                            JSON.stringify({
+                                ...sync,
+                                changed:
+                                    sync.previousCommit === null
+                                        ? null
+                                        : sync.commit !== sync.previousCommit,
+                                mode: 'live',
+                                running: record.desired === 'running',
+                                checkedAt: new Date().toISOString(),
+                            }),
+                            id
+                        );
+                        const { sync: omitted, ...state } = record;
+                        record = state;
+                    }
+                    save(record);
+                }
                 audit(db, user, action, id);
             },
             action
@@ -269,6 +299,13 @@ export function registerLifecycle({
             if (req.body.confirmed !== true) throw new Error('נדרש אישור מפורש');
             enqueue(req, res, 'project-' + operation);
         });
+    app.post('/api/projects/:project/sync', async (req, res) => {
+        const input = z
+            .object({ confirmed: z.literal(true) })
+            .strict()
+            .parse(req.body);
+        enqueue(req, res, 'project-sync', input);
+    });
     app.post('/api/projects/:project/command', async (req, res) => {
         const input = z
             .object({

@@ -27,8 +27,24 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
         release;
     let gate = Promise.resolve();
     let networkUnavailable = false;
+    let pullResult = {
+        commit: 'b'.repeat(40),
+        previousCommit: 'a'.repeat(40),
+        environment: 'DO_NOT_PERSIST_THIS',
+    };
     const helper = async (action, args) => {
         calls.push([action, args]);
+        if (action === 'project-sync')
+            return {
+                ...record,
+                desired: 'running',
+                activeCommit: 'c'.repeat(40),
+                sync: { commit: 'c'.repeat(40), previousCommit: 'b'.repeat(40) },
+            };
+        if (action === 'project-pull') {
+            if (pullResult instanceof Error) throw pullResult;
+            return pullResult;
+        }
         if (action === 'project-port-check')
             return {
                 port: args.port,
@@ -120,6 +136,49 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
     let response = await request('/login', 'POST', { username: 'admin', password });
     cookie = response.headers.get('set-cookie').split(';')[0];
     csrf = (await response.json()).csrf;
+    assert.equal(
+        (
+            await request(
+                '/projects/demo/sync',
+                'POST',
+                { confirmed: true },
+                { 'X-CSRF-Token': 'bad' }
+            )
+        ).status,
+        403
+    );
+    assert.equal(
+        (
+            await request(
+                '/projects/demo/sync',
+                'POST',
+                { confirmed: true },
+                { Origin: 'https://other.example' }
+            )
+        ).status,
+        403
+    );
+    assert.equal((await request('/projects/demo/sync', 'POST', {})).status, 400);
+    assert.equal(
+        (await request('/projects/demo/sync', 'POST', { confirmed: true, command: 'reboot' }))
+            .status,
+        400
+    );
+    response = await request('/projects/demo/sync', 'POST', { confirmed: true });
+    assert.equal(response.status, 202);
+    await queue.tail;
+    assert.equal(
+        JSON.parse(
+            db.prepare('SELECT source_sync_json FROM projects WHERE id=?').get('demo')
+                .source_sync_json
+        ).mode,
+        'live'
+    );
+    const syncedState = JSON.parse(
+        db.prepare('SELECT lifecycle_json FROM projects WHERE id=?').get('demo').lifecycle_json
+    );
+    assert.equal(syncedState.activeCommit, 'c'.repeat(40));
+    assert.equal(syncedState.sync, undefined);
     for (const headers of [{ 'X-CSRF-Token': 'bad' }, { Origin: 'https://other.example' }])
         assert.equal(
             (
@@ -149,6 +208,36 @@ test('lifecycle API preserves authentication, CSRF, session-only actions and pro
         confirmed: true,
         script: 'start',
     });
+    const sync = () =>
+        db.prepare('SELECT source_sync_json FROM projects WHERE id=?').get('demo').source_sync_json;
+    response = await request('/projects/demo/pull', 'POST', { confirmed: true });
+    assert.equal(response.status, 202);
+    const pullJob = (await response.json()).job;
+    await queue.tail;
+    assert.equal(JSON.parse(sync()).changed, true);
+    assert.equal(JSON.parse(sync()).commit, 'b'.repeat(40));
+    assert.ok(!sync().includes('DO_NOT_PERSIST_THIS'));
+    assert.match(
+        db
+            .prepare("SELECT text FROM job_events WHERE job=? AND stage='project-pull-result'")
+            .get(pullJob).text,
+        /עדכון ופריסה/
+    );
+    const lastSuccess = sync();
+    pullResult = new Error('Local changes prevent pull');
+    response = await request('/projects/demo/pull', 'POST', { confirmed: true });
+    const failedPull = (await response.json()).job;
+    await queue.tail;
+    assert.equal(db.prepare('SELECT status FROM jobs WHERE id=?').get(failedPull).status, 'failed');
+    assert.equal(sync(), lastSuccess);
+    pullResult = { commit: 'b'.repeat(40), previousCommit: 'b'.repeat(40) };
+    await request('/projects/demo/pull', 'POST', { confirmed: true });
+    await queue.tail;
+    assert.equal(JSON.parse(sync()).changed, false);
+    pullResult = { commit: 'b'.repeat(40) };
+    await request('/projects/demo/pull', 'POST', { confirmed: true });
+    await queue.tail;
+    assert.equal(JSON.parse(sync()).changed, null);
     assert.equal(
         (await request('/projects/demo/env/reveal', 'POST', {}, { 'X-CSRF-Token': 'bad' })).status,
         403

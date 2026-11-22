@@ -488,14 +488,46 @@ export async function createApp({ db, config, helper }) {
                               ? 'מושך קוד ללא פריסה'
                               : 'בונה גרסה ובודק תקינות'
                     );
-                    await helper(
+                    const result = await helper(
                         'project-' + action,
                         { project: p.id, confirmed: true, expected },
                         stage
                     );
-                    db.prepare('UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?').run(
-                        p.id
-                    );
+                    if (action === 'pull') {
+                        const commit = (value) =>
+                            typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
+                                ? value
+                                : null;
+                        const current = commit(result?.commit),
+                            previous = commit(result?.previousCommit);
+                        const changed = current && previous ? current !== previous : null;
+                        const text =
+                            changed === true
+                                ? 'קוד חדש נמשך לתיקיית המקור.'
+                                : changed === false
+                                  ? 'תיקיית המקור כבר מעודכנת; לא היו שינויים למשוך.'
+                                  : 'משיכת הקוד הסתיימה; לא התקבל מידע השוואה מלא.';
+                        stage({
+                            stage: 'project-pull-result',
+                            text:
+                                text +
+                                ' האתר לא הוחלף לגרסה חדשה; להפעלת השינויים נדרש עדכון ופריסה.',
+                        });
+                        db.prepare(
+                            'UPDATE projects SET last_sync=CURRENT_TIMESTAMP,source_sync_json=? WHERE id=?'
+                        ).run(
+                            JSON.stringify({
+                                commit: current,
+                                previousCommit: previous,
+                                changed,
+                                checkedAt: new Date().toISOString(),
+                            }),
+                            p.id
+                        );
+                    } else
+                        db.prepare(
+                            'UPDATE projects SET last_sync=CURRENT_TIMESTAMP WHERE id=?'
+                        ).run(p.id);
                     audit(db, req.session.username, 'project-' + action, p.id);
                 },
                 'project-' + action

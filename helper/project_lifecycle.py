@@ -428,6 +428,19 @@ class Lifecycle:
                 self.h['run'](['/usr/bin/systemctl','restart',self.names(identifier)['unit']]);self.health(identifier,old)
             self.save(identifier,old,True);self.finish(identifier)
             raise
+    def sync(self,identifier,args):
+        p=self.lookup(identifier)
+        if args.get('confirmed') is not True:raise ValueError('Explicit confirmation required')
+        if (p.get('branch') or 'main')!='main':raise ValueError('Live sync requires the configured main branch')
+        if not p.get('repo') or p.get('ownership')!='managed' or not p.get('runtime'):raise ValueError('Configure a repository and managed runtime before live sync')
+        emit('project-pull',text='Pulling main and preserving the previous source commit')
+        pulled=json.loads(self.h['project_run'](self.cfg,p,['pull'],120))
+        commit=pulled.get('commit');previous=pulled.get('previousCommit')
+        if not isinstance(commit,str) or not re.fullmatch(r'[a-f0-9]{40}',commit):raise ValueError('Pull did not return a verified commit')
+        # Always prepare the pulled commit, even when source was already current:
+        # the running release may still be older. Lifecycle handles rollback.
+        result=self.deploy(identifier,{'expected':commit})
+        return {**result,'sync':{'commit':commit,'previousCommit':previous if isinstance(previous,str) and re.fullmatch(r'[a-f0-9]{40}',previous) else None}}
     def command(self,identifier,args):
         p=self.lookup(identifier);runtime=p.get('runtime',{})
         if args.get('confirmed') is not True:raise ValueError('Explicit confirmation required')
@@ -585,7 +598,7 @@ class Lifecycle:
         p.update(lifecycle='deleted',updates='manual',desired='stopped');p.pop('archive',None);result=self.save(identifier,p,True);self.finish(identifier);return result
 
 READ_ACTIONS={'project-options','project-env-meta','project-env-values','project-records','project-state','project-head'}
-MUTATIONS={'project-runtime','project-env-patch','project-updates','project-start','project-stop','project-restart','project-enable','project-disable','project-archive','project-restore','project-purge','project-activate','project-command'}
+MUTATIONS={'project-runtime','project-env-patch','project-updates','project-start','project-stop','project-restart','project-enable','project-disable','project-archive','project-restore','project-purge','project-activate','project-command','project-sync'}
 
 def dispatch_lifecycle(cfg,action,args,backend):
     life=Lifecycle(cfg,backend)
@@ -609,6 +622,7 @@ def dispatch_lifecycle(cfg,action,args,backend):
         if action=='project-purge':return life.purge(identifier,args)
         if action=='project-activate':return life.deploy(identifier,args)
         if action=='project-command':return life.command(identifier,args)
+        if action=='project-sync':return life.sync(identifier,args)
         if action in ('project-start','project-stop','project-restart','project-enable','project-disable'):return life.control(identifier,action.removeprefix('project-'))
     raise ValueError('Unsupported lifecycle action')
 

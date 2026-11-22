@@ -130,6 +130,18 @@
             "verification": "33 Node tests passed, production build passed, helper suite ran 153 tests (136 passed, 17 platform skips). Focused Edge DOM scenarios cover ten card controls, pull/command payloads, runtime selection, running-service restrictions, unchanged tab and responsive layout. Real Ubuntu integration remains unverified."
         },
         {
+            "id": "persistent-github-pull-outcome",
+            "status": "implemented",
+            "description": "Preserve validated pull commit comparison and timestamp, display successful pull outcome on cards and clarify source-only versus live deployment; never infer no-change from missing helper fields",
+            "verification": "33 Node tests, production build, helper suite (153 total, 136 passed, 17 skips) and focused compact-card Edge DOM coverage passed. Changed, unchanged, legacy/unknown and failed pull outcomes are covered. Server pull success and real Ubuntu integration remain unverified."
+        },
+        {
+            "id": "unified-main-sync-live-update",
+            "status": "implemented",
+            "description": "Primary sync pulls configured main into source with backup ref and deploys the exact commit through existing lifecycle health/rollback in one resource-locked job; stopped projects remain stopped; separate pull-only retained",
+            "verification": "33 Node tests, production build, helper suite (155 total, 138 passed, 17 skips) passed. Focused DOM verifies unified sync and truthful live result. Installation policies are unchanged and Ubuntu/server integration remains unverified."
+        },
+        {
             "id": "ubuntu-live-validation",
             "status": "pending",
             "reason": "No Ubuntu server connection provided"

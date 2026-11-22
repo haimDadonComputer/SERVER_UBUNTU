@@ -192,8 +192,12 @@ export function ProjectActions({
     }
     const archived = p.lifecycle === 'archived';
     let updates: Data = {};
+    let sourceSync: Data = {};
     try {
         updates = JSON.parse(p.update_state || '{}');
+    } catch {}
+    try {
+        sourceSync = JSON.parse(p.source_sync_json || '{}') || {};
     } catch {}
     return (
         <>
@@ -248,6 +252,34 @@ export function ProjectActions({
                     <p>פעולת הפרסום האחרונה נכשלה; מצב התהליך מוצג בנפרד.</p>
                     <p>{publicationJob.error}</p>
                     <ErrorDetails details={publicationJob.details} jobId={publicationJob.id} />
+                </div>
+            )}
+            {!archived && sourceSync.checkedAt && (
+                <div className="project-update-status source-sync-result" role="status">
+                    <strong>תוצאת הסנכרון המוצלח האחרון</strong>
+                    <span>
+                        {sourceSync.changed === true
+                            ? 'קוד חדש נמשך לתיקיית המקור.'
+                            : sourceSync.changed === false
+                              ? 'תיקיית המקור כבר מעודכנת; לא היו שינויים למשוך.'
+                              : 'משיכת הקוד הסתיימה; לא התקבל מידע השוואה מלא.'}
+                    </span>
+                    <small>
+                        {new Date(sourceSync.checkedAt).toLocaleString('he-IL')}
+                        {sourceSync.commit && (
+                            <>
+                                {' '}
+                                · קומיט: <b dir="ltr">{sourceSync.commit.slice(0, 12)}</b>
+                            </>
+                        )}
+                    </small>
+                    <small>
+                        {sourceSync.mode === 'live'
+                            ? sourceSync.running
+                                ? 'האתר עודכן לגרסה הזו ועבר בדיקת תקינות.'
+                                : 'הגרסה החדשה מוכנה; הפרויקט נשאר כבוי.'
+                            : 'המשיכה אינה מפעילה קוד חדש באתר. להפעלת השינויים יש לבצע עדכון ופריסה.'}
+                    </small>
                 </div>
             )}
             <div className="project-actions">
@@ -346,16 +378,18 @@ export function ProjectActions({
                             )}
                             <button
                                 className="secondary"
-                                disabled={busy || !p.repo}
+                                disabled={busy || !p.repo || !p.runtime}
                                 title={
                                     !p.repo
                                         ? 'לא הוגדר מאגר GitHub לפרויקט'
-                                        : 'משיכת קוד בלבד, ללא התקנה או פריסה'
+                                        : !p.runtime
+                                          ? 'נדרשות הגדרות הפעלה לעדכון האתר'
+                                          : 'משיכת main, שמירת גיבוי ועדכון האתר'
                                 }
-                                onClick={() => setModal('pull')}
+                                onClick={() => setModal('sync')}
                             >
                                 <RefreshCw size={14} />
-                                {progress('pull', 'סנכרן עם הגיטהב')}
+                                {progress('sync', 'סנכרן עם הגיטהב')}
                             </button>
                             <button
                                 className="secondary"
@@ -585,6 +619,7 @@ export function ProjectActions({
                             restart: 'הפעלה מחדש',
                             activate: 'עדכון ופריסה',
                             pull: 'סנכרן עם הגיטהב',
+                            sync: 'סנכרן ועדכן את האתר',
                             archive: 'ארכוב פרויקט',
                             restore: 'שחזור פרויקט',
                             purge: 'מחיקה לצמיתות',
@@ -593,17 +628,19 @@ export function ProjectActions({
                     onClose={() => setModal('')}
                 >
                     <p className="muted">
-                        {modal === 'pull'
-                            ? 'השינויים יימשכו מהענף שהוגדר ב־GitHub אל תיקיית המקור בשרת, ללא התקנת תלויות, בנייה או הפעלה מחדש. הגרסה הפעילה לא תשתנה. שינויים מקומיים או היסטוריה שהתפצלה יחסמו את המשיכה; לא תתבצע העלאה ל־GitHub.'
-                            : modal === 'archive'
-                              ? 'השירות ייעצר והעדכונים יושהו. הקוד, ההגדרות והנתונים יישמרו לשחזור.'
-                              : modal === 'purge'
-                                ? 'כל משאבי הפרויקט שבארכיון יימחקו. היסטוריית הפעולות תישמר. אין אפשרות לבטל.'
-                                : modal === 'restore'
-                                  ? 'הפרויקט יחזור עם הנתונים ומשתני הסביבה, במצב כבוי ובעדכון ידני.'
-                                  : modal === 'activate'
-                                    ? 'תיבנה גרסה חדשה. שירות שכבר פועל יופעל מחדש וייבדק; פרויקט כבוי יישאר כבוי.'
-                                    : 'הפעולה תריץ או תעצור את קוד הפרויקט כמשתמש מוגבל. הפעלה ראשונה כוללת התקנת תלויות ובנייה.'}
+                        {modal === 'sync'
+                            ? 'main יימשך לתיקיית הפרויקט, ותישמר נקודת חזרה לקוד הקודם. האתר הפעיל יעודכן וייבדק; בכשל בפריסה המערכת תנסה להחזיר את הגרסה הקודמת. פרויקט כבוי יישאר כבוי. הכנת הגרסה כוללת התקנת תלויות ובנייה לפי ההגדרות.'
+                            : modal === 'pull'
+                              ? 'השינויים יימשכו מהענף שהוגדר ב־GitHub אל תיקיית המקור בשרת, ללא התקנת תלויות, בנייה או הפעלה מחדש. הגרסה הפעילה לא תשתנה. שינויים מקומיים או היסטוריה שהתפצלה יחסמו את המשיכה; לא תתבצע העלאה ל־GitHub.'
+                              : modal === 'archive'
+                                ? 'השירות ייעצר והעדכונים יושהו. הקוד, ההגדרות והנתונים יישמרו לשחזור.'
+                                : modal === 'purge'
+                                  ? 'כל משאבי הפרויקט שבארכיון יימחקו. היסטוריית הפעולות תישמר. אין אפשרות לבטל.'
+                                  : modal === 'restore'
+                                    ? 'הפרויקט יחזור עם הנתונים ומשתני הסביבה, במצב כבוי ובעדכון ידני.'
+                                    : modal === 'activate'
+                                      ? 'תיבנה גרסה חדשה. שירות שכבר פועל יופעל מחדש וייבדק; פרויקט כבוי יישאר כבוי.'
+                                      : 'הפעולה תריץ או תעצור את קוד הפרויקט כמשתמש מוגבל. הפעלה ראשונה כוללת התקנת תלויות ובנייה.'}
                     </p>
                     {['archive', 'purge'].includes(modal) && (
                         <div className="project-update-status">

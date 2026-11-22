@@ -243,7 +243,8 @@ def execute(root,action,args):
         backup='control-backup-'+str(time.time_ns())
         git(root,'branch',backup,s['commit'])
         git(root,'merge','--ff-only','refs/remotes/origin/'+s['branch'])
-        return {**status(root),'backupBranch':backup,'codeOnly':True}
+        result=status(root)
+        return {**result,'previousCommit':s['commit'],'changed':result['commit']!=s['commit'],'backupBranch':backup,'codeOnly':True}
     releases=root/'.control-releases'
     current=root/'current'
     if action=='deploy':

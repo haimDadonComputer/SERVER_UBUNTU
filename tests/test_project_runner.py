@@ -34,6 +34,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(git.call_args_list[0].args[1],'branch')
             self.assertEqual(git.call_args_list[1].args[1:],('merge','--ff-only','refs/remotes/origin/main'))
             self.assertTrue(result['codeOnly'])
+            self.assertEqual(result['previousCommit'],'a'*40);self.assertEqual(result['commit'],'b'*40);self.assertTrue(result['changed'])
+        with tempfile.TemporaryDirectory() as d,patch.object(r,'status',return_value={'dirty':False,'branch':'main','commit':'a'*40}),patch.object(r,'fetch'),patch.object(r,'git'):
+            result=r.execute(pathlib.Path(d),'pull',[])
+            self.assertFalse(result['changed']);self.assertEqual(result['previousCommit'],result['commit'])
     def test_dirty_pull_does_not_fetch_or_modify_files(self):
         with tempfile.TemporaryDirectory() as d,patch.object(r,'status',return_value={'dirty':True}),patch.object(r,'fetch') as fetch:
             with self.assertRaises(ValueError):r.execute(pathlib.Path(d),'pull',[])

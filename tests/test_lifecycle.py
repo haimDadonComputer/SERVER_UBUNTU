@@ -1,5 +1,5 @@
 import copy,json,pathlib,queue,sys,tempfile,unittest,os,shutil,subprocess
-from unittest.mock import Mock,patch
+from unittest.mock import Mock,patch,ANY
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'helper'))
 from project_lifecycle import Lifecycle,validate_runtime,project_lock,dispatch_lifecycle,recover_transactions,rehydrate
 from project_secrets import patch_values,read_values
@@ -25,6 +25,31 @@ class LifecycleTests(unittest.TestCase):
         self.runtime={'kind':'node','mode':'npm','script':'start','args':[],'health':'http','port':3000,'healthPath':'/','autostart':False}
     def managed(self):
         self.life.configure('demo',{'runtime':self.runtime});return self.registry['demo']
+    def test_sync_pulls_main_then_deploys_exact_commit_even_when_release_exists(self):
+        self.managed();self.registry['demo'].update(release='1-aaaaaaaaaa',preparedCommit='a'*40,runtimePending=False,desired='running')
+        self.runner.reset_mock()
+        self.runner.return_value=json.dumps({'commit':'b'*40,'previousCommit':'a'*40})
+        def release(identifier,p,expected):
+            self.assertEqual(expected,'b'*40);p.update(release='2-bbbbbbbbbb',preparedCommit='b'*40)
+            return {'release':p['release'],'commit':expected}
+        with patch.object(self.life,'release',side_effect=release) as build,patch.object(self.life,'provision'),patch.object(self.life,'health') as health:
+            result=self.life.sync('demo',{'confirmed':True})
+        self.runner.assert_called_once_with(self.cfg,ANY,['pull'],120)
+        self.assertEqual(result['activeCommit'],'b'*40);self.assertEqual(result['sync']['previousCommit'],'a'*40)
+        self.assertEqual(result['deployment'],'healthy');build.assert_called_once();health.assert_called_once()
+    def test_sync_refuses_wrong_branch_and_failed_pull_without_deploying(self):
+        self.managed();self.registry['demo']['branch']='develop'
+        with patch.object(self.life,'deploy') as deploy:
+            with self.assertRaises(ValueError):self.life.sync('demo',{'confirmed':True})
+            deploy.assert_not_called()
+        self.registry['demo']['branch']='main'
+        with patch.object(self.life,'deploy') as deploy:
+            with self.assertRaises(ValueError):self.life.sync('demo',{})
+            self.runner.side_effect=ValueError('Local changes prevent pull')
+            with self.assertRaises(ValueError):self.life.sync('demo',{'confirmed':True})
+            self.runner.side_effect=None;self.runner.return_value='{}'
+            with self.assertRaises(ValueError):self.life.sync('demo',{'confirmed':True})
+            deploy.assert_not_called()
     def test_command_reuses_managed_release_and_never_accepts_shell_input(self):
         self.managed();self.registry['demo'].update(release='1-aaaaaaaaaa',preparedCommit='a'*40,runtimePending=False)
         with patch.object(self.life,'release') as release,patch.object(self.life,'provision'),patch.object(self.life,'health') as health,patch.object(self.life,'configure') as configure:

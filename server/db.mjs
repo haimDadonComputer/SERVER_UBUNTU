@@ -29,6 +29,8 @@ export function openDatabase(dir) {
         db.exec("ALTER TABLE projects ADD COLUMN lifecycle_json TEXT NOT NULL DEFAULT '{}'");
     if (!columns.has('update_state'))
         db.exec("ALTER TABLE projects ADD COLUMN update_state TEXT NOT NULL DEFAULT '{}'");
+    if (!columns.has('source_sync_json'))
+        db.exec("ALTER TABLE projects ADD COLUMN source_sync_json TEXT NOT NULL DEFAULT '{}'");
     const jobColumns = new Set(
         db
             .prepare('PRAGMA table_info(jobs)')

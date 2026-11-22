@@ -12,6 +12,8 @@ export const stageLabel = (stage: string) =>
             'project-activate': 'מעדכן ופורס',
             'project-command': 'מריץ פקודת הפעלה',
             'project-pull': 'מסנכרן קוד מ־GitHub',
+            'project-sync': 'מסנכרן ומעדכן את האתר',
+            'project-pull-result': 'תוצאת סנכרון הקוד',
             'network-project': 'מעדכן פרסום פרויקט',
             'network-management': 'מעדכן פרסום ניהול',
             'network-certificate-test': 'בודק תעודה ב־staging',

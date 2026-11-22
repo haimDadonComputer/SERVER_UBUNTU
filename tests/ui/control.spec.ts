@@ -631,10 +631,18 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await page.route('**/api/projects/running/options', (route) =>
         route.fulfill({ json: { scripts: ['start', 'dev'] } })
     );
-    for (const operation of ['pull', 'command']) {
+    for (const operation of ['sync', 'command']) {
         await page.route(`**/api/projects/running/${operation}`, (route) => {
-            if (operation === 'pull') pullBody = route.request().postDataJSON();
-            else commandBody = route.request().postDataJSON();
+            if (operation === 'sync') {
+                pullBody = route.request().postDataJSON();
+                (projects[0] as any).source_sync_json = JSON.stringify({
+                    checkedAt: new Date().toISOString(),
+                    commit: 'b'.repeat(40),
+                    changed: true,
+                    mode: 'live',
+                    running: true,
+                });
+            } else commandBody = route.request().postDataJSON();
             projectJobs.unshift({
                 id: operation + '-card',
                 resource: 'project:running',
@@ -647,10 +655,22 @@ test('compact project cards expose primary actions, safe links, truthful publica
     }
     await card.getByRole('button', { name: 'סנכרן עם הגיטהב', exact: true }).click();
     let commandDialog = page.getByRole('dialog');
-    await expect(commandDialog).toContainText('ללא התקנת תלויות');
+    await expect(commandDialog).toContainText('main יימשך לתיקיית הפרויקט');
     await commandDialog.getByRole('button', { name: 'אישור הפעולה', exact: true }).click();
     await expect(commandDialog).not.toBeVisible();
     expect(pullBody).toEqual({ confirmed: true });
+    await expect(card.locator('.source-sync-result')).toContainText('קוד חדש נמשך לתיקיית המקור');
+    await expect(card.locator('.source-sync-result')).toContainText(
+        'האתר עודכן לגרסה הזו ועבר בדיקת תקינות'
+    );
+    await expect(card.locator('.source-sync-result')).toContainText('bbbbbbbbbbbb');
+    (projects[0] as any).source_sync_json = JSON.stringify({
+        checkedAt: new Date().toISOString(),
+        commit: 'b'.repeat(40),
+        changed: false,
+    });
+    await page.getByRole('button', { name: 'רענון נתונים', exact: true }).click();
+    await expect(card.locator('.source-sync-result')).toContainText('לא היו שינויים למשוך');
     await card.getByRole('button', { name: 'הרץ פקודה', exact: true }).click();
     commandDialog = page.getByRole('dialog');
     await expect(commandDialog.getByRole('combobox', { name: 'פקודה', exact: true })).toHaveValue(
@@ -663,7 +683,9 @@ test('compact project cards expose primary actions, safe links, truthful publica
     await expect(commandDialog).not.toBeVisible();
     expect(commandBody).toEqual({ confirmed: true, script: 'start' });
     await expect(card).toBeVisible();
-    await expect(page.getByRole('button', { name: 'הוספת פרויקט', exact: true }).first()).toBeVisible();
+    await expect(
+        page.getByRole('button', { name: 'הוספת פרויקט', exact: true }).first()
+    ).toBeVisible();
     await expect(stopped.getByRole('button', { name: 'עצירה', exact: true })).toBeDisabled();
     await expect(stopped.getByRole('button', { name: 'הפעלה מחדש', exact: true })).toBeDisabled();
     await expect(
